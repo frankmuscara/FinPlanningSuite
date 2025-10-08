@@ -1,0 +1,43 @@
+# ==================================================
+# Goshen Capital Financial Planner (GCFP) Project
+# ==================================================
+
+# Python cache & compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment / dependencies
+.env/
+.venv/
+*/.env
+*/.venv
+*.egg-info/
+
+# Build & distribution artifacts
+build/
+dist/
+*.spec
+run_boot.py          # Bootloader used only for EXE packaging
+logs/
+*.log
+
+# Data / local client info
+data/clients/
+data/clients_export.csv
+data/selected_portfolio.json
+data/cma.json
+
+# IDE / Editor settings
+.vscode/
+.idea/
+*.swp
+
+# OS-specific junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary / backup
+*.bak
+*.tmp

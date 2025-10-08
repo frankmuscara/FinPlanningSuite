@@ -1,0 +1,9 @@
+PyQt6>=6.6
+numpy>=1.26
+pandas>=2.0
+scipy>=1.11
+cvxpy>=1.4
+statsmodels>=0.14
+plotly>=5.20
+matplotlib>=3.8
+PyYAML>=6.0
