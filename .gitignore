@@ -41,3 +41,9 @@ desktop.ini
 # Temporary / backup
 *.bak
 *.tmp
+venv/
+.coverage
+htmlcov/
+.pytest_cache/
+*.pyc
+__pycache__/

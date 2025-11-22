@@ -51,7 +51,7 @@ def fetch_fred(symbol: str, start: str = "2000-01-01", end: str | None = None, f
         df = pdr.DataReader(symbol, "fred", start=start, end=end)  # DataFrame
         s = df.iloc[:, 0]
         s.name = symbol
-        _save_cache(symbol, s)
+        _save_cache(s, symbol)
         return s
     except Exception as e:
         # On any failure, try cache; if none, raise a clean error
