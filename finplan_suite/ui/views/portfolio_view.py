@@ -1,7 +1,7 @@
 # finplan_suite/ui/views/portfolio_view.py
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget,
-    QTableWidgetItem, QFrame, QSlider, QGridLayout, QMessageBox
+    QTableWidgetItem, QFrame, QSlider, QGridLayout, QMessageBox, QTabWidget
 )
 from PyQt6.QtCore import Qt
 
@@ -14,6 +14,7 @@ from matplotlib.figure import Figure
 from ...core.cma import load_cma_json, CMA
 from ...core.portfolio import build_frontier
 from ...core.store import load_client, list_clients
+from .hammer_view import HammerView
 
 RISK_TO_WEIGHTS = {
     "Conservative":            {"VOO":0.20,"IJR":0.05,"NEAR":0.20,"BOND":0.35,"TLT":0.10,"QLEIX":0.05,"VEMBX":0.04,"PDBC":0.01},
@@ -47,10 +48,25 @@ class PortfolioView(QWidget):
         # near the top of __init__, before creating buttons
         self.tickers = ["VOO","IJR","NEAR","BOND","TLT","QLEIX","VEMBX","PDBC"]
 
-        root = QVBoxLayout(self)
+        # Main layout with tabs
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Tab widget for Efficient Frontier and HAMMER
+        self.tabs = QTabWidget()
+        main_layout.addWidget(self.tabs)
+
+        # Tab 1: Efficient Frontier (existing functionality)
+        frontier_tab = QWidget()
+        root = QVBoxLayout(frontier_tab)
         header = QLabel("Portfolio Builder — Efficient Frontier")
         header.setStyleSheet("font-size:20px; font-weight:600;")
         root.addWidget(header)
+
+        # Tab 2: HAMMER Analysis
+        self.hammer_view = HammerView()
+        self.tabs.addTab(frontier_tab, "Efficient Frontier")
+        self.tabs.addTab(self.hammer_view, "HAMMER Analysis")
 
         # --- Top buttons ---
         top = QHBoxLayout()
@@ -120,7 +136,7 @@ class PortfolioView(QWidget):
             pct  = QLabel("0%")
 
             # connect AFTER creating pct so handler can update it
-            # we’ll use a tiny wrapper to pass index
+            # we'll use a tiny wrapper to pass index
             def _mk_handler(idx):
                 return lambda val: self._on_slider_changed(idx, val)
             sld.valueChanged.connect(_mk_handler(i))
@@ -201,6 +217,10 @@ class PortfolioView(QWidget):
             self.lbl_stats.setText("Current: —")
 
     # ---------- sliders & weights ----------
+    def _on_slider_changed(self, idx, value):
+        """Handle individual slider change."""
+        self.on_slider_change()
+
     def on_slider_change(self, _=None):
         raw = np.array([s.value() for s, _ in self.sliders], dtype=float)
         if raw.sum() <= 0:
@@ -211,6 +231,14 @@ class PortfolioView(QWidget):
         self.update_slider_labels()
         self.fill_weights_table()
         self.plot_frontier()
+        self._sync_to_hammer()
+
+    def _sync_to_hammer(self):
+        """Sync current weights to HAMMER view."""
+        if self.current_w is None:
+            return
+        weights_dict = dict(zip(self.tickers, self.current_w.tolist()))
+        self.hammer_view.set_portfolio(self.tickers, weights_dict)
 
     def set_weights(self, w):
         """Set sliders from a weight vector (auto-normalized)."""
@@ -226,6 +254,7 @@ class PortfolioView(QWidget):
         self.update_slider_labels()
         self.fill_weights_table()
         self.plot_frontier()
+        self._sync_to_hammer()
 
     def update_slider_labels(self):
         for (s, pct) in self.sliders:
@@ -308,5 +337,3 @@ class PortfolioView(QWidget):
 
         QMessageBox.information(self, "Suggested Allocation",
                              f"Applied {band} policy weights for client {c.first_name} {c.last_name}.")
-
-        
