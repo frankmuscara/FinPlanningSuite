@@ -13,7 +13,7 @@ from datetime import date
 import pandas as pd
 import yfinance as yf
 
-from hammer.models import PortfolioModel
+from .models import PortfolioModel
 
 
 @dataclass

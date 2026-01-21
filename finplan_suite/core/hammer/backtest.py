@@ -11,14 +11,14 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import numpy as np
 
-from hammer.portfolio import PortfolioConfig, Position, calculate_turnover
-from hammer.strategies import (
+from .portfolio import PortfolioConfig, Position, calculate_turnover
+from .strategies import (
     StrategyConfig,
     StrategyMode,
     check_rebalance_trigger,
 )
-from hammer.vix import fetch_vix_data, is_vix_blocked
-from hammer.data import fetch_prices, validate_prices
+from .vix import fetch_vix_data, is_vix_blocked
+from .data import fetch_prices, validate_prices
 
 
 @dataclass
@@ -60,11 +60,16 @@ class BacktestResult:
     def rebalance_events(self) -> List[RebalanceEvent]:
         """Get only rebalance events (excluding blocked)."""
         return [e for e in self.events if e.event_type == "rebalance"]
-
+    
     @property
     def blocked_events(self) -> List[RebalanceEvent]:
         """Get only blocked events."""
         return [e for e in self.events if e.event_type == "blocked"]
+
+    @property
+    def partial_events(self) -> List[RebalanceEvent]:
+        """Get only partial rebalance events (equity frozen)."""
+        return [e for e in self.events if e.event_type == "partial"]
 
     @property
     def total_turnover(self) -> float:
