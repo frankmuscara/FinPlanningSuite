@@ -124,7 +124,7 @@ def create_strategy_config(
         "buy_hold": StrategyMode.BUY_HOLD,
         "periodic": StrategyMode.PERIODIC,
         "drift": StrategyMode.DRIFT,
-        "hammer": StrategyMode.Strategy,
+        "hammer": StrategyMode.HAMMER,
     }
 
     freq_map = {
@@ -133,7 +133,7 @@ def create_strategy_config(
         "annual": RebalanceFrequency.ANNUAL,
     }
 
-    strategy_mode = mode_map.get(mode.lower(), StrategyMode.Strategy)
+    strategy_mode = mode_map.get(mode.lower(), StrategyMode.HAMMER)
     rebal_freq = freq_map.get(frequency.lower()) if frequency else None
 
     return StrategyConfig(
