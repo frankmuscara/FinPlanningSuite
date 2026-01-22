@@ -14,6 +14,7 @@ class StrategyMode(Enum):
     PERIODIC = "periodic"          # Rebalance on schedule
     DRIFT = "drift"                # Rebalance when drift exceeds threshold
     HAMMER = "hammer"              # Drift + VIX gate
+    SHIELD = "shield"              # Periodic + VIX gate
 
 
 class RebalanceFrequency(Enum):
@@ -34,8 +35,8 @@ class StrategyConfig:
 
     def __post_init__(self):
         """Validate configuration."""
-        if self.mode == StrategyMode.PERIODIC and self.rebalance_frequency is None:
-            raise ValueError("rebalance_frequency required for PERIODIC mode")
+        if self.mode in (StrategyMode.PERIODIC, StrategyMode.SHIELD) and self.rebalance_frequency is None:
+            raise ValueError("rebalance_frequency required for PERIODIC/SHIELD mode")
 
         if self.drift_threshold <= 0 or self.drift_threshold > 1:
             raise ValueError("drift_threshold must be between 0 and 1")
@@ -122,7 +123,7 @@ def check_rebalance_trigger(
     if strategy.mode == StrategyMode.BUY_HOLD:
         return False
 
-    elif strategy.mode == StrategyMode.PERIODIC:
+    elif strategy.mode in (StrategyMode.PERIODIC, StrategyMode.SHIELD):
         return is_period_end(current_date, strategy.rebalance_frequency)
 
     elif strategy.mode in (StrategyMode.DRIFT, StrategyMode.HAMMER):

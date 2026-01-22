@@ -143,9 +143,9 @@ class BacktestEngine:
         if issues["errors"]:
             raise ValueError(f"Data errors: {issues['errors']}")
 
-        # 2. Fetch VIX data if needed
+        # 2. Fetch VIX data if needed (for HAMMER and SHIELD modes)
         vix_slope = None
-        if strategy.mode == StrategyMode.HAMMER:
+        if strategy.mode in (StrategyMode.HAMMER, StrategyMode.SHIELD):
             try:
                 _, _, vix_slope = fetch_vix_data(
                     config.start_date,
@@ -197,10 +197,10 @@ class BacktestEngine:
                 is_first_day,
             )
 
-            # Check VIX gate (HAMMER mode only)
+            # Check VIX gate (HAMMER and SHIELD modes)
             vix_blocked = False
             current_vix_slope = None
-            if should_rebalance and strategy.mode == StrategyMode.HAMMER:
+            if should_rebalance and strategy.mode in (StrategyMode.HAMMER, StrategyMode.SHIELD):
                 if vix_slope is not None:
                     current_vix_slope = vix_slope.loc[current_date]
                     vix_blocked = is_vix_blocked(current_vix_slope)

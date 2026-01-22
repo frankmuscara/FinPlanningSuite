@@ -125,6 +125,7 @@ def create_strategy_config(
         "periodic": StrategyMode.PERIODIC,
         "drift": StrategyMode.DRIFT,
         "hammer": StrategyMode.HAMMER,
+        "shield": StrategyMode.SHIELD,
     }
 
     freq_map = {
@@ -404,6 +405,11 @@ def generate_client_summary(
 during market stress periods. When the VIX curve inverts (indicating market
 panic), HAMMER freezes intra-equity trades while still allowing asset
 allocation adjustments."""
+    elif strategy_mode == StrategyMode.SHIELD:
+        freq = strategy_result.strategy_config.rebalance_frequency.value if strategy_result.strategy_config.rebalance_frequency else "quarterly"
+        strategy_desc = f"""The SHIELD strategy rebalances the portfolio on a {freq} schedule,
+but skips rebalancing entirely when the VIX curve is inverted (indicating
+market panic). This protects against forced selling during market stress."""
     elif strategy_mode == StrategyMode.DRIFT:
         strategy_desc = f"""The DRIFT strategy rebalances the portfolio whenever any asset's weight
 drifts more than {strategy_result.strategy_config.drift_threshold:.0%} from its target allocation."""

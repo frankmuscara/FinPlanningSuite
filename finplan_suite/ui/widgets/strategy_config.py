@@ -39,6 +39,7 @@ class StrategyConfigWidget(QWidget):
 
         strategies = [
             ("hammer", "HAMMER (Drift + VIX Gate)", "Recommended - blocks intra-equity rebalancing during market stress"),
+            ("shield", "SHIELD (Periodic + VIX Gate)", "Quarterly rebalancing blocked during VIX inversion"),
             ("drift", "Drift-Based", "Rebalance when allocation drifts beyond threshold"),
             ("periodic", "Periodic", "Rebalance on fixed schedule"),
             ("buy_hold", "Buy & Hold", "No rebalancing after initial investment"),
@@ -135,8 +136,8 @@ class StrategyConfigWidget(QWidget):
         # Enable/disable drift threshold based on mode
         self.drift_spin.setEnabled(mode in ("drift", "hammer"))
 
-        # Enable/disable frequency based on mode
-        self.freq_combo.setEnabled(mode == "periodic")
+        # Enable/disable frequency based on mode (periodic and shield use frequency)
+        self.freq_combo.setEnabled(mode in ("periodic", "shield"))
 
         self.configChanged.emit()
 
