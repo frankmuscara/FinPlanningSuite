@@ -10,7 +10,7 @@ selling equities into a downturn while maintaining overall allocation targets.
 """
 
 from .portfolio import PortfolioConfig, Position
-from .strategies import StrategyConfig, StrategyMode
+from .strategies import StrategyConfig, StrategyMode, RebalanceFrequency
 from .backtest import BacktestEngine, BacktestResult, RebalanceEvent
 from .metrics import PerformanceMetrics, compute_metrics
 from .vix import fetch_vix_data, get_vix_signal, VixSignal
@@ -41,6 +41,7 @@ __all__ = [
     # Strategy
     "StrategyConfig",
     "StrategyMode",
+    "RebalanceFrequency",
     # Backtest
     "BacktestEngine",
     "BacktestResult",

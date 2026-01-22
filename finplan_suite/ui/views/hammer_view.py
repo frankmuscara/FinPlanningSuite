@@ -22,15 +22,17 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+import pandas as pd
 
 from finplan_suite.ui.widgets.strategy_config import StrategyConfigWidget
+from finplan_suite.core.hammer.vix import get_blocked_regions
 from finplan_suite.ui.widgets.metrics_table import MetricsTableWidget
 
 
 class BacktestWorker(QThread):
     """Worker thread for running backtests without blocking UI."""
 
-    finished = pyqtSignal(object, object)  # hammer_result, drift_result
+    finished = pyqtSignal(object, object)  # hammer_result, benchmark_metrics
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
 
@@ -44,12 +46,12 @@ class BacktestWorker(QThread):
             self.progress.emit("Fetching price data...")
 
             from finplan_suite.core.hammer_bridge import run_comparison_backtest
-            hammer_result, drift_result = run_comparison_backtest(
+            hammer_result, benchmark_metrics = run_comparison_backtest(
                 self.portfolio_config,
                 self.drift_threshold,
             )
 
-            self.finished.emit(hammer_result, drift_result)
+            self.finished.emit(hammer_result, benchmark_metrics)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -64,7 +66,7 @@ class HammerView(QWidget):
         self._current_weights = None
         self._current_tickers = None
         self._hammer_result = None
-        self._drift_result = None
+        self._benchmark_metrics = None
         self._worker = None
 
         self._init_ui()
@@ -79,7 +81,7 @@ class HammerView(QWidget):
 
         desc = QLabel(
             "HAMMER blocks intra-equity rebalancing during VIX curve inversion (market panic), "
-            "while still allowing asset allocation adjustments. Compare against traditional drift-based rebalancing."
+            "while still allowing asset allocation adjustments. Compare your portfolio against a benchmark."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #555; margin-bottom: 10px;")
@@ -104,7 +106,33 @@ class HammerView(QWidget):
         bench_row = QHBoxLayout()
         bench_row.addWidget(QLabel("Benchmark:"))
         self.benchmark_combo = QComboBox()
-        self.benchmark_combo.addItems(["SPY", "QQQ", "VTI", "IWM", "AGG"])
+        # Organized by category with clear labels
+        benchmarks = [
+            # Broad Market Equity
+            ("SPY", "SPY - S&P 500"),
+            ("QQQ", "QQQ - Nasdaq 100"),
+            ("VTI", "VTI - Total US Stock"),
+            ("IWM", "IWM - Russell 2000"),
+            ("VEA", "VEA - Developed Intl"),
+            ("VWO", "VWO - Emerging Markets"),
+            # Fixed Income
+            ("AGG", "AGG - US Aggregate Bond"),
+            ("BND", "BND - Total Bond Market"),
+            ("TLT", "TLT - 20+ Year Treasury"),
+            # Vanguard LifeStrategy Funds (Asset Allocation)
+            ("VASGX", "VASGX - LifeStrategy Growth (80/20)"),
+            ("VSMGX", "VSMGX - LifeStrategy Mod Growth (60/40)"),
+            ("VSCGX", "VSCGX - LifeStrategy Conserv (40/60)"),
+            ("VASIX", "VASIX - LifeStrategy Income (20/80)"),
+            # Other Balanced Funds
+            ("AOR", "AOR - iShares Growth Alloc (60/40)"),
+            ("AOM", "AOM - iShares Moderate Alloc (40/60)"),
+            ("AOK", "AOK - iShares Conserv Alloc (30/70)"),
+            ("AOA", "AOA - iShares Aggress Alloc (80/20)"),
+        ]
+        for ticker, label in benchmarks:
+            self.benchmark_combo.addItem(label, ticker)
+        self.benchmark_combo.setCurrentIndex(0)  # Default to SPY
         bench_row.addWidget(self.benchmark_combo)
         bench_row.addStretch()
         portfolio_layout.addLayout(bench_row)
@@ -217,7 +245,7 @@ class HammerView(QWidget):
             portfolio_config = portfolio_weights_to_hammer_config(
                 tickers=self._current_tickers,
                 weights=self._current_weights,
-                benchmark=self.benchmark_combo.currentText(),
+                benchmark=self.benchmark_combo.currentData(),
                 initial_capital=config["initial_capital"],
                 start_date=config["start_date"],
                 end_date=config["end_date"],
@@ -237,31 +265,30 @@ class HammerView(QWidget):
         self._worker.progress.connect(lambda msg: self.progress_label.setText(msg))
         self._worker.start()
 
-    def _on_backtest_finished(self, hammer_result, drift_result):
+    def _on_backtest_finished(self, hammer_result, benchmark_metrics):
         """Handle backtest completion."""
         self._hammer_result = hammer_result
-        self._drift_result = drift_result
+        self._benchmark_metrics = benchmark_metrics
 
         self.btn_run.setEnabled(True)
         self.btn_export_csv.setEnabled(True)
         self.btn_summary.setEnabled(True)
         self.progress_label.setText("Backtest complete!")
 
-        # Compute metrics
+        # Compute HAMMER metrics
         from finplan_suite.core.hammer_bridge import (
             compute_result_metrics,
             metrics_to_comparison_dict,
         )
 
         hammer_metrics = compute_result_metrics(hammer_result)
-        drift_metrics = compute_result_metrics(drift_result)
 
-        # Update metrics table
-        comparison = metrics_to_comparison_dict(hammer_metrics, drift_metrics)
+        # Update metrics table (comparing HAMMER vs Benchmark)
+        comparison = metrics_to_comparison_dict(hammer_metrics, benchmark_metrics)
         self.metrics_table.set_comparison_data(comparison)
 
         # Plot results
-        self._plot_results(hammer_result, drift_result)
+        self._plot_results(hammer_result)
 
     def _on_backtest_error(self, error_msg):
         """Handle backtest error."""
@@ -269,24 +296,24 @@ class HammerView(QWidget):
         self.progress_label.setText("")
         QMessageBox.critical(self, "Backtest Error", f"Error running backtest:\n{error_msg}")
 
-    def _plot_results(self, hammer_result, drift_result):
+    def _plot_results(self, hammer_result):
         """Plot NAV comparison chart."""
         self.fig.clear()
         ax = self.fig.add_subplot(111)
 
         # Normalize to $100 start for comparison
         hammer_norm = 100 * hammer_result.nav / hammer_result.nav.iloc[0]
-        drift_norm = 100 * drift_result.nav / drift_result.nav.iloc[0]
         bench_norm = 100 * hammer_result.benchmark_nav / hammer_result.benchmark_nav.iloc[0]
 
+        # Get benchmark name from combo box
+        benchmark_name = self.benchmark_combo.currentData() or "Benchmark"
+
         # Plot NAV lines
-        ax.plot(hammer_norm.index, hammer_norm.values, label="HAMMER", linewidth=2, color="#2E86AB")
-        ax.plot(drift_norm.index, drift_norm.values, label="Traditional Drift", linewidth=2, color="#A23B72", alpha=0.8)
-        ax.plot(bench_norm.index, bench_norm.values, label="Benchmark", linewidth=1, color="#666", linestyle="--", alpha=0.6)
+        ax.plot(hammer_norm.index, hammer_norm.values, label="HAMMER Portfolio", linewidth=2.5, color="#2E86AB")
+        ax.plot(bench_norm.index, bench_norm.values, label=f"{benchmark_name} (Benchmark)", linewidth=2, color="#A23B72", alpha=0.9)
 
         # Shade VIX backwardation regions
         if hammer_result.vix_slope is not None:
-            from finplan_suite.core.hammer.vix import get_blocked_regions
             blocked = get_blocked_regions(hammer_result.vix_slope)
 
             for _, row in blocked.iterrows():
@@ -295,18 +322,24 @@ class HammerView(QWidget):
             # Add one entry for legend
             if len(blocked) > 0:
                 ax.axvspan(blocked.iloc[0]["start"], blocked.iloc[0]["start"],
-                          alpha=0.15, color="red", label="VIX Inverted")
+                          alpha=0.15, color="red", label="VIX Inverted (Rebal Blocked)")
 
         # Mark partial rebalance events
         partial_events = hammer_result.partial_events
         if partial_events:
             partial_dates = [e.date for e in partial_events]
-            partial_values = [hammer_norm.loc[str(d)] if str(d) in hammer_norm.index else None
-                            for d in partial_dates]
-            partial_values = [v for v in partial_values if v is not None]
-            if partial_values:
-                ax.scatter([partial_dates[i] for i, v in enumerate(partial_values) if v],
-                          partial_values, marker="^", s=50, color="orange",
+            # Look up values using proper Timestamp conversion for DatetimeIndex
+            partial_values = []
+            for d in partial_dates:
+                try:
+                    partial_values.append(hammer_norm.loc[pd.Timestamp(d)])
+                except KeyError:
+                    partial_values.append(None)
+            # Filter both dates and values together to avoid length mismatch
+            valid_points = [(d, v) for d, v in zip(partial_dates, partial_values) if v is not None]
+            if valid_points:
+                plot_dates, plot_values = zip(*valid_points)
+                ax.scatter(plot_dates, plot_values, marker="^", s=50, color="orange",
                           label=f"Equity Frozen ({len(partial_events)})", zorder=5)
 
         ax.set_xlabel("Date")
@@ -316,11 +349,11 @@ class HammerView(QWidget):
 
         # Format final values annotation
         final_hammer = hammer_norm.iloc[-1]
-        final_drift = drift_norm.iloc[-1]
+        final_bench = bench_norm.iloc[-1]
         ax.annotate(f"${final_hammer:.0f}", xy=(hammer_norm.index[-1], final_hammer),
-                   xytext=(5, 0), textcoords="offset points", fontsize=9, color="#2E86AB")
-        ax.annotate(f"${final_drift:.0f}", xy=(drift_norm.index[-1], final_drift),
-                   xytext=(5, 0), textcoords="offset points", fontsize=9, color="#A23B72")
+                   xytext=(5, 5), textcoords="offset points", fontsize=9, color="#2E86AB", fontweight="bold")
+        ax.annotate(f"${final_bench:.0f}", xy=(bench_norm.index[-1], final_bench),
+                   xytext=(5, -10), textcoords="offset points", fontsize=9, color="#A23B72", fontweight="bold")
 
         self.canvas.draw_idle()
 
@@ -339,7 +372,7 @@ class HammerView(QWidget):
 
     def _generate_summary(self):
         """Generate client-facing summary."""
-        if not self._hammer_result or not self._drift_result:
+        if not self._hammer_result or not self._benchmark_metrics:
             return
 
         from finplan_suite.core.hammer_bridge import (
@@ -348,13 +381,13 @@ class HammerView(QWidget):
         )
 
         hammer_metrics = compute_result_metrics(self._hammer_result)
-        drift_metrics = compute_result_metrics(self._drift_result)
+        benchmark_name = self.benchmark_combo.currentData() or "Benchmark"
 
         summary = generate_client_summary(
             self._hammer_result,
-            self._drift_result,
             hammer_metrics,
-            drift_metrics,
+            self._benchmark_metrics,
+            benchmark_name=benchmark_name,
         )
 
         # Show in dialog

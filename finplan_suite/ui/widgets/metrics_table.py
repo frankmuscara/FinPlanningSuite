@@ -30,7 +30,7 @@ class MetricsTableWidget(QWidget):
 
         self.table = QTableWidget()
         self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["Metric", "HAMMER", "Traditional", "Difference"])
+        self.table.setHorizontalHeaderLabels(["Metric", "HAMMER", "Benchmark", "Difference"])
 
         # Style header
         header = self.table.horizontalHeader()
@@ -53,7 +53,7 @@ class MetricsTableWidget(QWidget):
         """Populate table with comparison data.
 
         Args:
-            comparison: Dict mapping metric name to {HAMMER, Drift, Difference}
+            comparison: Dict mapping metric name to {HAMMER, Benchmark, Difference}
         """
         self.table.setRowCount(len(comparison))
 
@@ -68,10 +68,10 @@ class MetricsTableWidget(QWidget):
             hammer_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
             self.table.setItem(row, 1, hammer_item)
 
-            # Traditional/Drift value
-            drift_item = QTableWidgetItem(values.get("Drift", "N/A"))
-            drift_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.table.setItem(row, 2, drift_item)
+            # Benchmark value
+            benchmark_item = QTableWidgetItem(values.get("Benchmark", "N/A"))
+            benchmark_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.table.setItem(row, 2, benchmark_item)
 
             # Difference
             diff_str = values.get("Difference", "N/A")
@@ -82,7 +82,7 @@ class MetricsTableWidget(QWidget):
             if "✓" in diff_str:
                 diff_item.setForeground(QColor(0, 128, 0))  # Green for positive
                 diff_item.setFont(QFont("", -1, QFont.Weight.Bold))
-            elif diff_str.startswith("-") and "N/A" not in diff_str:
+            elif diff_str.startswith("-") and "N/A" not in diff_str and "—" not in diff_str:
                 # Check if this is a "lower is better" metric
                 if metric_name in ("Max Drawdown", "Volatility", "Total Turnover"):
                     diff_item.setForeground(QColor(0, 128, 0))  # Green

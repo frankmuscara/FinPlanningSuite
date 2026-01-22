@@ -9,6 +9,7 @@ from datetime import date
 from typing import Dict, List, Optional, Tuple
 import json
 import os
+import pandas as pd
 
 from finplan_suite.core.hammer import (
     PortfolioConfig,
@@ -145,15 +146,15 @@ def create_strategy_config(
 def run_comparison_backtest(
     portfolio_config: PortfolioConfig,
     drift_threshold: float = 0.05,
-) -> Tuple[BacktestResult, BacktestResult]:
-    """Run side-by-side HAMMER vs DRIFT backtest.
+) -> Tuple[BacktestResult, PerformanceMetrics]:
+    """Run HAMMER backtest and compare against benchmark.
 
     Args:
         portfolio_config: Portfolio configuration
-        drift_threshold: Drift threshold for both strategies
+        drift_threshold: Drift threshold for HAMMER strategy
 
     Returns:
-        Tuple of (hammer_result, drift_result)
+        Tuple of (hammer_result, benchmark_metrics)
     """
     # HAMMER strategy (drift + VIX gate)
     hammer_strategy = StrategyConfig(
@@ -161,20 +162,39 @@ def run_comparison_backtest(
         drift_threshold=drift_threshold,
     )
 
-    # Plain drift strategy (no VIX gate)
-    drift_strategy = StrategyConfig(
-        mode=StrategyMode.DRIFT,
-        drift_threshold=drift_threshold,
-    )
-
-    # Run both backtests
+    # Run HAMMER backtest
     hammer_engine = BacktestEngine(portfolio_config, hammer_strategy)
-    drift_engine = BacktestEngine(portfolio_config, drift_strategy)
-
     hammer_result = hammer_engine.run()
-    drift_result = drift_engine.run()
 
-    return hammer_result, drift_result
+    # Compute benchmark metrics from the benchmark_nav in the result
+    benchmark_metrics = compute_benchmark_metrics(hammer_result.benchmark_nav)
+
+    return hammer_result, benchmark_metrics
+
+
+def compute_benchmark_metrics(
+    benchmark_nav: pd.Series,
+    risk_free_rate: float = 0.02,
+) -> PerformanceMetrics:
+    """Compute performance metrics for a benchmark (buy-and-hold).
+
+    Args:
+        benchmark_nav: Benchmark NAV time series
+        risk_free_rate: Annual risk-free rate
+
+    Returns:
+        PerformanceMetrics object for benchmark
+    """
+    # Benchmark is buy-and-hold, so no rebalancing metrics
+    return compute_metrics(
+        benchmark_nav,
+        benchmark_nav,  # Benchmark vs itself (alpha/beta will be 0/1)
+        risk_free_rate=risk_free_rate,
+        rebalances_per_year=0,
+        blocked_rebalances=0,
+        partial_rebalances=0,
+        total_turnover=0,
+    )
 
 
 def compute_result_metrics(
@@ -203,54 +223,80 @@ def compute_result_metrics(
 
 def metrics_to_comparison_dict(
     hammer_metrics: PerformanceMetrics,
-    drift_metrics: PerformanceMetrics,
+    benchmark_metrics: PerformanceMetrics,
 ) -> Dict[str, Dict[str, str]]:
     """Format metrics for side-by-side comparison table.
 
     Args:
         hammer_metrics: Metrics from HAMMER strategy
-        drift_metrics: Metrics from drift strategy
+        benchmark_metrics: Metrics from benchmark (buy-and-hold)
 
     Returns:
-        Dictionary with metric names as keys, containing HAMMER/Drift/Diff values
+        Dictionary with metric names as keys, containing HAMMER/Benchmark/Diff values
     """
     comparison = {}
 
     h = hammer_metrics
-    d = drift_metrics
+    b = benchmark_metrics
 
     rows = [
-        ("Annualized Return", h.cagr, d.cagr, True),
-        ("Volatility", h.volatility, d.volatility, False),  # Lower is better
-        ("Sharpe Ratio", h.sharpe_ratio, d.sharpe_ratio, True),
-        ("Sortino Ratio", h.sortino_ratio, d.sortino_ratio, True),
-        ("Max Drawdown", h.max_drawdown, d.max_drawdown, False),  # Less negative is better
-        ("Alpha", h.alpha, d.alpha, True),
-        ("Beta", h.beta, d.beta, None),  # Neutral
-        ("Total Turnover", h.total_turnover, d.total_turnover, False),
-        ("Equity-Frozen Events", h.partial_rebalances, d.partial_rebalances, None),
+        ("Annualized Return", h.cagr, b.cagr, True),
+        ("Volatility", h.volatility, b.volatility, False),  # Lower is better
+        ("Sharpe Ratio", h.sharpe_ratio, b.sharpe_ratio, True),
+        ("Sortino Ratio", h.sortino_ratio, b.sortino_ratio, True),
+        ("Max Drawdown", h.max_drawdown, b.max_drawdown, False),  # Less negative is better
+        ("Alpha vs Benchmark", h.alpha, None, True),  # Benchmark alpha is always 0
+        ("Beta vs Benchmark", h.beta, None, None),  # Benchmark beta is always 1
+        ("Total Turnover", h.total_turnover, b.total_turnover, False),
+        ("Equity-Frozen Events", h.partial_rebalances, None, None),  # Only HAMMER has this
     ]
 
-    for name, h_val, d_val, higher_better in rows:
-        if h_val is None or d_val is None:
-            diff_str = "N/A"
-            h_str = "N/A" if h_val is None else f"{h_val:.2%}" if abs(h_val) < 10 else f"{h_val:.2f}"
-            d_str = "N/A" if d_val is None else f"{d_val:.2%}" if abs(d_val) < 10 else f"{d_val:.2f}"
+    for name, h_val, b_val, higher_better in rows:
+        # Format HAMMER value
+        if h_val is None:
+            h_str = "N/A"
+        elif name in ("Sharpe Ratio", "Sortino Ratio", "Beta vs Benchmark"):
+            h_str = f"{h_val:.2f}"
+        elif name == "Equity-Frozen Events":
+            h_str = str(int(h_val))
         else:
-            diff = h_val - d_val
+            h_str = f"{h_val:.2%}"
+
+        # Format Benchmark value
+        if b_val is None:
+            if name == "Alpha vs Benchmark":
+                b_str = "0.00%"  # By definition
+            elif name == "Beta vs Benchmark":
+                b_str = "1.00"  # By definition
+            elif name == "Equity-Frozen Events":
+                b_str = "—"  # N/A for benchmark
+            else:
+                b_str = "N/A"
+        elif name in ("Sharpe Ratio", "Sortino Ratio"):
+            b_str = f"{b_val:.2f}"
+        elif name == "Equity-Frozen Events":
+            b_str = str(int(b_val))
+        else:
+            b_str = f"{b_val:.2%}"
+
+        # Calculate difference
+        if h_val is None or b_val is None:
+            if name == "Alpha vs Benchmark" and h_val is not None:
+                # Alpha IS the outperformance vs benchmark
+                diff_str = f"{h_val:+.2%}" if h_val > 0 else f"{h_val:.2%}"
+                if h_val > 0:
+                    diff_str += " ✓"
+            elif name == "Equity-Frozen Events" and h_val is not None:
+                diff_str = f"{int(h_val)} events"
+            else:
+                diff_str = "—"
+        else:
+            diff = h_val - b_val
 
             # Format based on metric type
-            if name in ("Sharpe Ratio", "Sortino Ratio", "Beta"):
-                h_str = f"{h_val:.2f}"
-                d_str = f"{d_val:.2f}"
+            if name in ("Sharpe Ratio", "Sortino Ratio"):
                 diff_str = f"{diff:+.2f}"
-            elif name == "Equity-Frozen Events":
-                h_str = str(int(h_val))
-                d_str = str(int(d_val))
-                diff_str = str(int(diff))
             else:
-                h_str = f"{h_val:.2%}"
-                d_str = f"{d_val:.2%}"
                 diff_str = f"{diff:+.2%}"
 
             # Add indicator if HAMMER is better
@@ -261,7 +307,7 @@ def metrics_to_comparison_dict(
 
         comparison[name] = {
             "HAMMER": h_str,
-            "Drift": d_str,
+            "Benchmark": b_str,
             "Difference": diff_str,
         }
 
@@ -327,29 +373,31 @@ def save_backtest_result(
 
 def generate_client_summary(
     hammer_result: BacktestResult,
-    drift_result: BacktestResult,
     hammer_metrics: PerformanceMetrics,
-    drift_metrics: PerformanceMetrics,
+    benchmark_metrics: PerformanceMetrics,
+    benchmark_name: str = "Benchmark",
     client_name: str = "Client",
 ) -> str:
     """Generate client-facing summary text.
 
     Args:
         hammer_result: HAMMER backtest result
-        drift_result: Drift backtest result
         hammer_metrics: HAMMER performance metrics
-        drift_metrics: Drift performance metrics
+        benchmark_metrics: Benchmark performance metrics
+        benchmark_name: Name of the benchmark (e.g., "SPY")
         client_name: Client name for personalization
 
     Returns:
         Formatted summary text
     """
-    # Calculate key differences
-    return_diff = hammer_metrics.cagr - drift_metrics.cagr
-    sharpe_diff = hammer_metrics.sharpe_ratio - drift_metrics.sharpe_ratio
-    dd_diff = hammer_metrics.max_drawdown - drift_metrics.max_drawdown  # Less negative = better
+    # Calculate key differences vs benchmark
+    return_diff = hammer_metrics.cagr - benchmark_metrics.cagr
+    sharpe_diff = hammer_metrics.sharpe_ratio - benchmark_metrics.sharpe_ratio
+    dd_diff = hammer_metrics.max_drawdown - benchmark_metrics.max_drawdown  # Less negative = better
+    vol_diff = hammer_metrics.volatility - benchmark_metrics.volatility
 
     partial_count = len(hammer_result.partial_events)
+    blocked_count = len(hammer_result.blocked_events)
     years = (hammer_result.effective_end - hammer_result.effective_start).days / 365.25
 
     summary = f"""
@@ -358,48 +406,64 @@ PORTFOLIO ANALYSIS SUMMARY
 Client: {client_name}
 Analysis Date: {date.today().strftime('%B %d, %Y')}
 Backtest Period: {hammer_result.effective_start} to {hammer_result.effective_end} ({years:.1f} years)
+Benchmark: {benchmark_name}
 
-RECOMMENDED STRATEGY: HAMMER Rebalancing
+STRATEGY: HAMMER Rebalancing
 
 The HAMMER strategy uses VIX term structure analysis to avoid rebalancing
 during market stress periods. When the VIX curve inverts (indicating market
 panic), HAMMER freezes intra-equity trades while still allowing asset
 allocation adjustments.
 
-KEY FINDINGS:
+KEY FINDINGS vs {benchmark_name}:
 """
 
     findings = []
 
     if return_diff > 0:
-        findings.append(f"• Improved annualized return by {return_diff:.2%}")
+        findings.append(f"• Outperformed {benchmark_name} by {return_diff:.2%} annually")
     elif return_diff < 0:
-        findings.append(f"• Slightly lower return ({return_diff:.2%}) with reduced risk")
+        findings.append(f"• Underperformed {benchmark_name} by {abs(return_diff):.2%} (may have lower risk)")
 
     if sharpe_diff > 0:
-        findings.append(f"• Better risk-adjusted returns (Sharpe +{sharpe_diff:.2f})")
+        findings.append(f"• Better risk-adjusted returns (Sharpe +{sharpe_diff:.2f} vs benchmark)")
 
     if dd_diff > 0:  # Less negative = improvement
-        findings.append(f"• Reduced maximum drawdown by {abs(dd_diff):.2%}")
+        findings.append(f"• Smaller maximum drawdown by {abs(dd_diff):.2%}")
 
-    if partial_count > 0:
-        findings.append(f"• Protected portfolio during {partial_count} market stress events")
+    if vol_diff < 0:
+        findings.append(f"• Lower volatility by {abs(vol_diff):.2%}")
+
+    if partial_count > 0 or blocked_count > 0:
+        findings.append(f"• Protected portfolio during {partial_count + blocked_count} market stress events")
+
+    if hammer_metrics.alpha is not None and hammer_metrics.alpha > 0:
+        findings.append(f"• Generated {hammer_metrics.alpha:.2%} alpha vs benchmark")
 
     summary += "\n".join(findings)
 
     summary += f"""
 
 PERFORMANCE COMPARISON:
-                    HAMMER      Traditional     Difference
-─────────────────────────────────────────────────────────
-Annualized Return   {hammer_metrics.cagr:>7.2%}     {drift_metrics.cagr:>7.2%}        {return_diff:>+7.2%}
-Volatility          {hammer_metrics.volatility:>7.2%}     {drift_metrics.volatility:>7.2%}        {hammer_metrics.volatility - drift_metrics.volatility:>+7.2%}
-Sharpe Ratio        {hammer_metrics.sharpe_ratio:>7.2f}       {drift_metrics.sharpe_ratio:>7.2f}          {sharpe_diff:>+7.2f}
-Max Drawdown        {hammer_metrics.max_drawdown:>7.2%}     {drift_metrics.max_drawdown:>7.2%}        {dd_diff:>+7.2%}
+                    HAMMER      {benchmark_name:^12}   Difference
+─────────────────────────────────────────────────────────────
+Annualized Return   {hammer_metrics.cagr:>7.2%}       {benchmark_metrics.cagr:>7.2%}        {return_diff:>+7.2%}
+Volatility          {hammer_metrics.volatility:>7.2%}       {benchmark_metrics.volatility:>7.2%}        {vol_diff:>+7.2%}
+Sharpe Ratio        {hammer_metrics.sharpe_ratio:>7.2f}         {benchmark_metrics.sharpe_ratio:>7.2f}          {sharpe_diff:>+7.2f}
+Max Drawdown        {hammer_metrics.max_drawdown:>7.2%}       {benchmark_metrics.max_drawdown:>7.2%}        {dd_diff:>+7.2%}
 """
 
-    if hammer_metrics.alpha is not None and drift_metrics.alpha is not None:
-        alpha_diff = hammer_metrics.alpha - drift_metrics.alpha
-        summary += f"Alpha               {hammer_metrics.alpha:>7.2%}     {drift_metrics.alpha:>7.2%}        {alpha_diff:>+7.2%}\n"
+    if hammer_metrics.alpha is not None:
+        summary += f"Alpha vs Benchmark  {hammer_metrics.alpha:>7.2%}         0.00%          {hammer_metrics.alpha:>+7.2%}\n"
+
+    if hammer_metrics.beta is not None:
+        summary += f"Beta vs Benchmark   {hammer_metrics.beta:>7.2f}          1.00           {hammer_metrics.beta - 1:>+7.2f}\n"
+
+    summary += f"""
+HAMMER ACTIVITY:
+• Rebalances blocked during VIX inversion: {blocked_count}
+• Partial rebalances (equity frozen): {partial_count}
+• Total portfolio turnover: {hammer_metrics.total_turnover:.2%}
+"""
 
     return summary
