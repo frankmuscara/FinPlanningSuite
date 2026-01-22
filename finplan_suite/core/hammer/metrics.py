@@ -31,7 +31,8 @@ class PerformanceMetrics:
     # Turnover metrics
     rebalances_per_year: float
     blocked_rebalances: int
-    total_turnover: float
+    partial_rebalances: int = 0
+    total_turnover: float = 0.0
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -49,6 +50,7 @@ class PerformanceMetrics:
             "Information Ratio": self.information_ratio,
             "Rebalances/Year": self.rebalances_per_year,
             "Blocked Rebalances": self.blocked_rebalances,
+            "Partial Rebalances": self.partial_rebalances,
             "Total Turnover": self.total_turnover,
         }
 
@@ -68,6 +70,7 @@ class PerformanceMetrics:
             "Info Ratio": f"{self.information_ratio:.2f}" if self.information_ratio else "N/A",
             "Rebalances/Year": f"{self.rebalances_per_year:.1f}",
             "Blocked Rebalances": str(self.blocked_rebalances),
+            "Partial Rebalances": str(self.partial_rebalances),
             "Total Turnover": f"{self.total_turnover:.2%}",
         }
 
@@ -79,6 +82,7 @@ def compute_metrics(
     periods_per_year: int = 252,
     rebalances_per_year: float = 0,
     blocked_rebalances: int = 0,
+    partial_rebalances: int = 0,
     total_turnover: float = 0,
 ) -> PerformanceMetrics:
     """Compute performance metrics from NAV series.
@@ -90,6 +94,7 @@ def compute_metrics(
         periods_per_year: Trading days per year
         rebalances_per_year: Average rebalances per year
         blocked_rebalances: Count of blocked rebalances
+        partial_rebalances: Count of partial rebalances (equity frozen)
         total_turnover: Sum of turnover from all rebalances
 
     Returns:
@@ -145,7 +150,6 @@ def compute_metrics(
 
     if benchmark_nav is not None:
         benchmark_nav = benchmark_nav.dropna()
-        # Align series
         common_idx = nav.index.intersection(benchmark_nav.index)
         nav_aligned = nav.loc[common_idx]
         benchmark_aligned = benchmark_nav.loc[common_idx]
@@ -154,25 +158,20 @@ def compute_metrics(
             port_returns = nav_aligned.pct_change().dropna()
             bench_returns = benchmark_aligned.pct_change().dropna()
 
-            # Align returns
             common_ret_idx = port_returns.index.intersection(bench_returns.index)
             port_returns = port_returns.loc[common_ret_idx]
             bench_returns = bench_returns.loc[common_ret_idx]
 
-            # Beta
             covariance = port_returns.cov(bench_returns)
             bench_variance = bench_returns.var()
             beta = covariance / bench_variance if bench_variance > 0 else 0
 
-            # Alpha (annualized)
             bench_cagr = (benchmark_aligned.iloc[-1] / benchmark_aligned.iloc[0]) ** (1 / n_years) - 1 if n_years > 0 else 0
             alpha = cagr - (risk_free_rate + beta * (bench_cagr - risk_free_rate))
 
-            # Tracking error
             active_returns = port_returns - bench_returns
             tracking_error = active_returns.std() * np.sqrt(periods_per_year)
 
-            # Information ratio
             information_ratio = (
                 active_returns.mean() * periods_per_year / tracking_error
                 if tracking_error > 0 else 0
@@ -192,6 +191,7 @@ def compute_metrics(
         information_ratio=information_ratio,
         rebalances_per_year=rebalances_per_year,
         blocked_rebalances=blocked_rebalances,
+        partial_rebalances=partial_rebalances,
         total_turnover=total_turnover,
     )
 
@@ -203,24 +203,8 @@ def compute_metrics_for_window(
     years: float,
     **kwargs,
 ) -> Tuple[PerformanceMetrics, date, date]:
-    """Compute metrics for a specific time window.
-
-    This does NOT re-run simulation - just slices existing NAV series.
-
-    Args:
-        nav: Full NAV series
-        benchmark_nav: Full benchmark NAV series
-        window_end: End date of window
-        years: Number of years to look back
-        **kwargs: Additional arguments for compute_metrics
-
-    Returns:
-        Tuple of (metrics, actual_start_date, actual_end_date)
-    """
-    # Calculate window start
+    """Compute metrics for a specific time window."""
     window_start = window_end - timedelta(days=int(years * 365.25))
-
-    # Slice series
     nav_slice = nav.loc[str(window_start):str(window_end)]
     benchmark_slice = None
     if benchmark_nav is not None:
@@ -229,11 +213,9 @@ def compute_metrics_for_window(
     if len(nav_slice) < 2:
         raise ValueError(f"Insufficient data for {years}-year window")
 
-    # Get actual dates
     actual_start = nav_slice.index[0]
     actual_end = nav_slice.index[-1]
 
-    # Compute metrics (turnover metrics don't apply to sub-windows)
     metrics = compute_metrics(
         nav_slice,
         benchmark_slice,
@@ -246,14 +228,7 @@ def compute_metrics_for_window(
 
 
 def compute_drawdown_series(nav: pd.Series) -> pd.Series:
-    """Compute drawdown time series from NAV.
-
-    Args:
-        nav: NAV time series
-
-    Returns:
-        Drawdown series (negative values)
-    """
+    """Compute drawdown time series from NAV."""
     cumulative = nav / nav.iloc[0]
     running_max = cumulative.expanding().max()
     drawdown = (cumulative - running_max) / running_max
