@@ -169,6 +169,10 @@ class BacktestEngine:
         benchmark_shares = config.initial_capital / benchmark_start_price
 
         # 4. Run simulation
+        # Track whether we're in a "pending rebalance blocked" state to avoid
+        # counting multiple blocked events for the same rebalance attempt
+        pending_rebalance_blocked = False
+
         for i, current_date in enumerate(prices.index):
             current_prices = prices.loc[current_date].to_dict()
             is_first_day = (i == 0)
@@ -204,18 +208,25 @@ class BacktestEngine:
             # Record pre-rebalance weights
             old_weights = position.weights(current_prices) if position.shares else {}
 
+            # If drift drops below threshold, reset the pending blocked state
+            if not should_rebalance and pending_rebalance_blocked:
+                pending_rebalance_blocked = False
+
             # Execute rebalance or record blocked event
             if should_rebalance and vix_blocked:
-                # Blocked by VIX
-                events.append(RebalanceEvent(
-                    date=current_date.date() if hasattr(current_date, "date") else current_date,
-                    event_type="blocked",
-                    old_weights=old_weights,
-                    new_weights=old_weights,
-                    turnover=0,
-                    vix_slope=current_vix_slope,
-                    reason="VIX curve inverted",
-                ))
+                # Only record blocked event if this is a NEW rebalance attempt
+                # (not a continuation of an existing blocked state)
+                if not pending_rebalance_blocked:
+                    events.append(RebalanceEvent(
+                        date=current_date.date() if hasattr(current_date, "date") else current_date,
+                        event_type="blocked",
+                        old_weights=old_weights,
+                        new_weights=old_weights,
+                        turnover=0,
+                        vix_slope=current_vix_slope,
+                        reason="VIX curve inverted",
+                    ))
+                    pending_rebalance_blocked = True
 
             elif should_rebalance:
                 # Execute rebalance
@@ -238,6 +249,8 @@ class BacktestEngine:
 
                 position = new_position
                 portfolio_value = position.value(current_prices)
+                # Reset blocked state after successful rebalance
+                pending_rebalance_blocked = False
 
             # Record history
             nav_history.append(portfolio_value)
