@@ -30,7 +30,7 @@ class MetricsTableWidget(QWidget):
 
         self.table = QTableWidget()
         self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["Metric", "HAMMER", "Benchmark", "Difference"])
+        self.table.setHorizontalHeaderLabels(["Metric", "Strategy", "Benchmark", "Difference"])
 
         # Style header
         header = self.table.horizontalHeader()
@@ -63,10 +63,10 @@ class MetricsTableWidget(QWidget):
             name_item.setFont(QFont("", -1, QFont.Weight.Bold))
             self.table.setItem(row, 0, name_item)
 
-            # HAMMER value
-            hammer_item = QTableWidgetItem(values.get("HAMMER", "N/A"))
-            hammer_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            self.table.setItem(row, 1, hammer_item)
+            # Strategy value
+            strategy_item = QTableWidgetItem(values.get("Strategy", "N/A"))
+            strategy_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            self.table.setItem(row, 1, strategy_item)
 
             # Benchmark value
             benchmark_item = QTableWidgetItem(values.get("Benchmark", "N/A"))

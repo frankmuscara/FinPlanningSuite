@@ -1,7 +1,7 @@
-"""Bridge between FinPlanningSuite and HAMMER.
+"""Bridge between FinPlanningSuite and Strategy.
 
 Provides utilities to convert between FinPlanningSuite data structures
-(CMA, Client, Portfolio) and HAMMER data structures (PortfolioConfig,
+(CMA, Client, Portfolio) and Strategy data structures (PortfolioConfig,
 StrategyConfig, BacktestResult).
 """
 
@@ -40,7 +40,7 @@ def ensure_dirs():
 def cma_to_hammer_inputs(
     cma_path: str = None
 ) -> Tuple[List[str], Dict[str, float], float]:
-    """Extract HAMMER-compatible inputs from CMA file.
+    """Extract Strategy-compatible inputs from CMA file.
 
     Args:
         cma_path: Path to cma.json. Uses default if None.
@@ -72,7 +72,7 @@ def portfolio_weights_to_hammer_config(
     start_date: date = None,
     end_date: date = None,
 ) -> PortfolioConfig:
-    """Convert Portfolio Builder weights to HAMMER PortfolioConfig.
+    """Convert Portfolio Builder weights to Strategy PortfolioConfig.
 
     Args:
         tickers: List of ticker symbols
@@ -83,7 +83,7 @@ def portfolio_weights_to_hammer_config(
         end_date: Backtest end date
 
     Returns:
-        PortfolioConfig ready for HAMMER backtest
+        PortfolioConfig ready for Strategy backtest
     """
     # Default to 10 years of history
     if end_date is None:
@@ -110,7 +110,7 @@ def create_strategy_config(
     drift_threshold: float = 0.05,
     frequency: str = None,
 ) -> StrategyConfig:
-    """Create HAMMER StrategyConfig from UI inputs.
+    """Create Strategy StrategyConfig from UI inputs.
 
     Args:
         mode: Strategy mode ("buy_hold", "periodic", "drift", "hammer")
@@ -124,7 +124,7 @@ def create_strategy_config(
         "buy_hold": StrategyMode.BUY_HOLD,
         "periodic": StrategyMode.PERIODIC,
         "drift": StrategyMode.DRIFT,
-        "hammer": StrategyMode.HAMMER,
+        "hammer": StrategyMode.Strategy,
     }
 
     freq_map = {
@@ -133,7 +133,7 @@ def create_strategy_config(
         "annual": RebalanceFrequency.ANNUAL,
     }
 
-    strategy_mode = mode_map.get(mode.lower(), StrategyMode.HAMMER)
+    strategy_mode = mode_map.get(mode.lower(), StrategyMode.Strategy)
     rebal_freq = freq_map.get(frequency.lower()) if frequency else None
 
     return StrategyConfig(
@@ -145,31 +145,25 @@ def create_strategy_config(
 
 def run_comparison_backtest(
     portfolio_config: PortfolioConfig,
-    drift_threshold: float = 0.05,
+    strategy_config: StrategyConfig,
 ) -> Tuple[BacktestResult, PerformanceMetrics]:
-    """Run HAMMER backtest and compare against benchmark.
+    """Run strategy backtest and compare against benchmark.
 
     Args:
         portfolio_config: Portfolio configuration
-        drift_threshold: Drift threshold for HAMMER strategy
+        strategy_config: Strategy configuration (mode, drift threshold, frequency)
 
     Returns:
-        Tuple of (hammer_result, benchmark_metrics)
+        Tuple of (strategy_result, benchmark_metrics)
     """
-    # HAMMER strategy (drift + VIX gate)
-    hammer_strategy = StrategyConfig(
-        mode=StrategyMode.HAMMER,
-        drift_threshold=drift_threshold,
-    )
-
-    # Run HAMMER backtest
-    hammer_engine = BacktestEngine(portfolio_config, hammer_strategy)
-    hammer_result = hammer_engine.run()
+    # Run backtest with the provided strategy
+    engine = BacktestEngine(portfolio_config, strategy_config)
+    strategy_result = engine.run()
 
     # Compute benchmark metrics from the benchmark_nav in the result
-    benchmark_metrics = compute_benchmark_metrics(hammer_result.benchmark_nav)
+    benchmark_metrics = compute_benchmark_metrics(strategy_result.benchmark_nav)
 
-    return hammer_result, benchmark_metrics
+    return strategy_result, benchmark_metrics
 
 
 def compute_benchmark_metrics(
@@ -204,7 +198,7 @@ def compute_result_metrics(
     """Compute performance metrics from backtest result.
 
     Args:
-        result: BacktestResult from HAMMER engine
+        result: BacktestResult from Strategy engine
         risk_free_rate: Annual risk-free rate
 
     Returns:
@@ -228,11 +222,11 @@ def metrics_to_comparison_dict(
     """Format metrics for side-by-side comparison table.
 
     Args:
-        hammer_metrics: Metrics from HAMMER strategy
+        hammer_metrics: Metrics from Strategy strategy
         benchmark_metrics: Metrics from benchmark (buy-and-hold)
 
     Returns:
-        Dictionary with metric names as keys, containing HAMMER/Benchmark/Diff values
+        Dictionary with metric names as keys, containing Strategy/Benchmark/Diff values
     """
     comparison = {}
 
@@ -248,11 +242,11 @@ def metrics_to_comparison_dict(
         ("Alpha vs Benchmark", h.alpha, None, True),  # Benchmark alpha is always 0
         ("Beta vs Benchmark", h.beta, None, None),  # Benchmark beta is always 1
         ("Total Turnover", h.total_turnover, b.total_turnover, False),
-        ("Equity-Frozen Events", h.partial_rebalances, None, None),  # Only HAMMER has this
+        ("Equity-Frozen Events", h.partial_rebalances, None, None),  # Only Strategy has this
     ]
 
     for name, h_val, b_val, higher_better in rows:
-        # Format HAMMER value
+        # Format Strategy value
         if h_val is None:
             h_str = "N/A"
         elif name in ("Sharpe Ratio", "Sortino Ratio", "Beta vs Benchmark"):
@@ -299,14 +293,14 @@ def metrics_to_comparison_dict(
             else:
                 diff_str = f"{diff:+.2%}"
 
-            # Add indicator if HAMMER is better
+            # Add indicator if Strategy is better
             if higher_better is True and diff > 0:
                 diff_str += " ✓"
             elif higher_better is False and diff < 0:
                 diff_str += " ✓"
 
         comparison[name] = {
-            "HAMMER": h_str,
+            "Strategy": h_str,
             "Benchmark": b_str,
             "Difference": diff_str,
         }
@@ -372,8 +366,8 @@ def save_backtest_result(
 
 
 def generate_client_summary(
-    hammer_result: BacktestResult,
-    hammer_metrics: PerformanceMetrics,
+    strategy_result: BacktestResult,
+    strategy_metrics: PerformanceMetrics,
     benchmark_metrics: PerformanceMetrics,
     benchmark_name: str = "Benchmark",
     client_name: str = "Client",
@@ -381,8 +375,8 @@ def generate_client_summary(
     """Generate client-facing summary text.
 
     Args:
-        hammer_result: HAMMER backtest result
-        hammer_metrics: HAMMER performance metrics
+        strategy_result: Backtest result
+        strategy_metrics: Strategy performance metrics
         benchmark_metrics: Benchmark performance metrics
         benchmark_name: Name of the benchmark (e.g., "SPY")
         client_name: Client name for personalization
@@ -390,30 +384,48 @@ def generate_client_summary(
     Returns:
         Formatted summary text
     """
-    # Calculate key differences vs benchmark
-    return_diff = hammer_metrics.cagr - benchmark_metrics.cagr
-    sharpe_diff = hammer_metrics.sharpe_ratio - benchmark_metrics.sharpe_ratio
-    dd_diff = hammer_metrics.max_drawdown - benchmark_metrics.max_drawdown  # Less negative = better
-    vol_diff = hammer_metrics.volatility - benchmark_metrics.volatility
+    # Get strategy mode
+    strategy_mode = strategy_result.strategy_config.mode
+    strategy_name = strategy_mode.value.upper()
 
-    partial_count = len(hammer_result.partial_events)
-    blocked_count = len(hammer_result.blocked_events)
-    years = (hammer_result.effective_end - hammer_result.effective_start).days / 365.25
+    # Calculate key differences vs benchmark
+    return_diff = strategy_metrics.cagr - benchmark_metrics.cagr
+    sharpe_diff = strategy_metrics.sharpe_ratio - benchmark_metrics.sharpe_ratio
+    dd_diff = strategy_metrics.max_drawdown - benchmark_metrics.max_drawdown  # Less negative = better
+    vol_diff = strategy_metrics.volatility - benchmark_metrics.volatility
+
+    partial_count = len(strategy_result.partial_events)
+    blocked_count = len(strategy_result.blocked_events)
+    years = (strategy_result.effective_end - strategy_result.effective_start).days / 365.25
+
+    # Strategy-specific description
+    if strategy_mode == StrategyMode.HAMMER:
+        strategy_desc = """The HAMMER strategy uses VIX term structure analysis to avoid rebalancing
+during market stress periods. When the VIX curve inverts (indicating market
+panic), HAMMER freezes intra-equity trades while still allowing asset
+allocation adjustments."""
+    elif strategy_mode == StrategyMode.DRIFT:
+        strategy_desc = f"""The DRIFT strategy rebalances the portfolio whenever any asset's weight
+drifts more than {strategy_result.strategy_config.drift_threshold:.0%} from its target allocation."""
+    elif strategy_mode == StrategyMode.PERIODIC:
+        freq = strategy_result.strategy_config.rebalance_frequency.value if strategy_result.strategy_config.rebalance_frequency else "quarterly"
+        strategy_desc = f"""The PERIODIC strategy rebalances the portfolio on a {freq} schedule,
+regardless of market conditions or drift from target allocations."""
+    else:  # BUY_HOLD
+        strategy_desc = """The BUY & HOLD strategy makes an initial investment and then holds
+without any rebalancing, letting allocations drift with market movements."""
 
     summary = f"""
 PORTFOLIO ANALYSIS SUMMARY
 ==========================
 Client: {client_name}
 Analysis Date: {date.today().strftime('%B %d, %Y')}
-Backtest Period: {hammer_result.effective_start} to {hammer_result.effective_end} ({years:.1f} years)
+Backtest Period: {strategy_result.effective_start} to {strategy_result.effective_end} ({years:.1f} years)
 Benchmark: {benchmark_name}
 
-STRATEGY: HAMMER Rebalancing
+STRATEGY: {strategy_name} Rebalancing
 
-The HAMMER strategy uses VIX term structure analysis to avoid rebalancing
-during market stress periods. When the VIX curve inverts (indicating market
-panic), HAMMER freezes intra-equity trades while still allowing asset
-allocation adjustments.
+{strategy_desc}
 
 KEY FINDINGS vs {benchmark_name}:
 """
@@ -437,33 +449,33 @@ KEY FINDINGS vs {benchmark_name}:
     if partial_count > 0 or blocked_count > 0:
         findings.append(f"• Protected portfolio during {partial_count + blocked_count} market stress events")
 
-    if hammer_metrics.alpha is not None and hammer_metrics.alpha > 0:
-        findings.append(f"• Generated {hammer_metrics.alpha:.2%} alpha vs benchmark")
+    if strategy_metrics.alpha is not None and strategy_metrics.alpha > 0:
+        findings.append(f"• Generated {strategy_metrics.alpha:.2%} alpha vs benchmark")
 
     summary += "\n".join(findings)
 
     summary += f"""
 
 PERFORMANCE COMPARISON:
-                    HAMMER      {benchmark_name:^12}   Difference
+                    {strategy_name:^12}   {benchmark_name:^12}   Difference
 ─────────────────────────────────────────────────────────────
-Annualized Return   {hammer_metrics.cagr:>7.2%}       {benchmark_metrics.cagr:>7.2%}        {return_diff:>+7.2%}
-Volatility          {hammer_metrics.volatility:>7.2%}       {benchmark_metrics.volatility:>7.2%}        {vol_diff:>+7.2%}
-Sharpe Ratio        {hammer_metrics.sharpe_ratio:>7.2f}         {benchmark_metrics.sharpe_ratio:>7.2f}          {sharpe_diff:>+7.2f}
-Max Drawdown        {hammer_metrics.max_drawdown:>7.2%}       {benchmark_metrics.max_drawdown:>7.2%}        {dd_diff:>+7.2%}
+Annualized Return   {strategy_metrics.cagr:>7.2%}       {benchmark_metrics.cagr:>7.2%}        {return_diff:>+7.2%}
+Volatility          {strategy_metrics.volatility:>7.2%}       {benchmark_metrics.volatility:>7.2%}        {vol_diff:>+7.2%}
+Sharpe Ratio        {strategy_metrics.sharpe_ratio:>7.2f}         {benchmark_metrics.sharpe_ratio:>7.2f}          {sharpe_diff:>+7.2f}
+Max Drawdown        {strategy_metrics.max_drawdown:>7.2%}       {benchmark_metrics.max_drawdown:>7.2%}        {dd_diff:>+7.2%}
 """
 
-    if hammer_metrics.alpha is not None:
-        summary += f"Alpha vs Benchmark  {hammer_metrics.alpha:>7.2%}         0.00%          {hammer_metrics.alpha:>+7.2%}\n"
+    if strategy_metrics.alpha is not None:
+        summary += f"Alpha vs Benchmark  {strategy_metrics.alpha:>7.2%}         0.00%          {strategy_metrics.alpha:>+7.2%}\n"
 
-    if hammer_metrics.beta is not None:
-        summary += f"Beta vs Benchmark   {hammer_metrics.beta:>7.2f}          1.00           {hammer_metrics.beta - 1:>+7.2f}\n"
+    if strategy_metrics.beta is not None:
+        summary += f"Beta vs Benchmark   {strategy_metrics.beta:>7.2f}          1.00           {strategy_metrics.beta - 1:>+7.2f}\n"
 
     summary += f"""
-HAMMER ACTIVITY:
+{strategy_name} ACTIVITY:
 • Rebalances blocked during VIX inversion: {blocked_count}
 • Partial rebalances (equity frozen): {partial_count}
-• Total portfolio turnover: {hammer_metrics.total_turnover:.2%}
+• Total portfolio turnover: {strategy_metrics.total_turnover:.2%}
 """
 
     return summary

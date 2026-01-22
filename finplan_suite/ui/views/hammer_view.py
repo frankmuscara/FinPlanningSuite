@@ -32,26 +32,26 @@ from finplan_suite.ui.widgets.metrics_table import MetricsTableWidget
 class BacktestWorker(QThread):
     """Worker thread for running backtests without blocking UI."""
 
-    finished = pyqtSignal(object, object)  # hammer_result, benchmark_metrics
+    finished = pyqtSignal(object, object)  # strategy_result, benchmark_metrics
     error = pyqtSignal(str)
     progress = pyqtSignal(str)
 
-    def __init__(self, portfolio_config, drift_threshold):
+    def __init__(self, portfolio_config, strategy_config):
         super().__init__()
         self.portfolio_config = portfolio_config
-        self.drift_threshold = drift_threshold
+        self.strategy_config = strategy_config
 
     def run(self):
         try:
             self.progress.emit("Fetching price data...")
 
             from finplan_suite.core.hammer_bridge import run_comparison_backtest
-            hammer_result, benchmark_metrics = run_comparison_backtest(
+            strategy_result, benchmark_metrics = run_comparison_backtest(
                 self.portfolio_config,
-                self.drift_threshold,
+                self.strategy_config,
             )
 
-            self.finished.emit(hammer_result, benchmark_metrics)
+            self.finished.emit(strategy_result, benchmark_metrics)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -230,16 +230,19 @@ class HammerView(QWidget):
         self.btn_run.setEnabled(True)
 
     def _run_backtest(self):
-        """Run HAMMER vs Drift comparison backtest."""
+        """Run strategy backtest and compare vs benchmark."""
         if not self._current_weights:
             QMessageBox.warning(self, "No Portfolio", "Please set portfolio weights first.")
             return
 
-        # Get configuration
+        # Get configuration from UI
         config = self.strategy_widget.get_config()
 
         # Build portfolio config
-        from finplan_suite.core.hammer_bridge import portfolio_weights_to_hammer_config
+        from finplan_suite.core.hammer_bridge import (
+            portfolio_weights_to_hammer_config,
+            create_strategy_config,
+        )
 
         try:
             portfolio_config = portfolio_weights_to_hammer_config(
@@ -250,45 +253,55 @@ class HammerView(QWidget):
                 start_date=config["start_date"],
                 end_date=config["end_date"],
             )
+
+            # Create strategy config from UI settings
+            strategy_config = create_strategy_config(
+                mode=config["mode"],
+                drift_threshold=config["drift_threshold"],
+                frequency=config["frequency"],
+            )
         except Exception as e:
             QMessageBox.critical(self, "Configuration Error", str(e))
             return
 
         # Disable UI during backtest
         self.btn_run.setEnabled(False)
-        self.progress_label.setText("Running backtest...")
+        self.progress_label.setText(f"Running {config['mode'].upper()} backtest...")
 
         # Run in worker thread
-        self._worker = BacktestWorker(portfolio_config, config["drift_threshold"])
+        self._worker = BacktestWorker(portfolio_config, strategy_config)
         self._worker.finished.connect(self._on_backtest_finished)
         self._worker.error.connect(self._on_backtest_error)
         self._worker.progress.connect(lambda msg: self.progress_label.setText(msg))
         self._worker.start()
 
-    def _on_backtest_finished(self, hammer_result, benchmark_metrics):
+    def _on_backtest_finished(self, strategy_result, benchmark_metrics):
         """Handle backtest completion."""
-        self._hammer_result = hammer_result
+        self._hammer_result = strategy_result  # Keep name for compatibility
         self._benchmark_metrics = benchmark_metrics
 
         self.btn_run.setEnabled(True)
         self.btn_export_csv.setEnabled(True)
         self.btn_summary.setEnabled(True)
-        self.progress_label.setText("Backtest complete!")
 
-        # Compute HAMMER metrics
+        # Show strategy mode in completion message
+        mode = strategy_result.strategy_config.mode.value.upper()
+        self.progress_label.setText(f"Backtest complete! ({mode})")
+
+        # Compute strategy metrics
         from finplan_suite.core.hammer_bridge import (
             compute_result_metrics,
             metrics_to_comparison_dict,
         )
 
-        hammer_metrics = compute_result_metrics(hammer_result)
+        strategy_metrics = compute_result_metrics(strategy_result)
 
-        # Update metrics table (comparing HAMMER vs Benchmark)
-        comparison = metrics_to_comparison_dict(hammer_metrics, benchmark_metrics)
+        # Update metrics table (comparing Strategy vs Benchmark)
+        comparison = metrics_to_comparison_dict(strategy_metrics, benchmark_metrics)
         self.metrics_table.set_comparison_data(comparison)
 
         # Plot results
-        self._plot_results(hammer_result)
+        self._plot_results(strategy_result)
 
     def _on_backtest_error(self, error_msg):
         """Handle backtest error."""
@@ -296,25 +309,26 @@ class HammerView(QWidget):
         self.progress_label.setText("")
         QMessageBox.critical(self, "Backtest Error", f"Error running backtest:\n{error_msg}")
 
-    def _plot_results(self, hammer_result):
+    def _plot_results(self, strategy_result):
         """Plot NAV comparison chart."""
         self.fig.clear()
         ax = self.fig.add_subplot(111)
 
         # Normalize to $100 start for comparison
-        hammer_norm = 100 * hammer_result.nav / hammer_result.nav.iloc[0]
-        bench_norm = 100 * hammer_result.benchmark_nav / hammer_result.benchmark_nav.iloc[0]
+        strategy_norm = 100 * strategy_result.nav / strategy_result.nav.iloc[0]
+        bench_norm = 100 * strategy_result.benchmark_nav / strategy_result.benchmark_nav.iloc[0]
 
-        # Get benchmark name from combo box
+        # Get strategy and benchmark names
+        strategy_mode = strategy_result.strategy_config.mode.value.upper()
         benchmark_name = self.benchmark_combo.currentData() or "Benchmark"
 
         # Plot NAV lines
-        ax.plot(hammer_norm.index, hammer_norm.values, label="HAMMER Portfolio", linewidth=2.5, color="#2E86AB")
+        ax.plot(strategy_norm.index, strategy_norm.values, label=f"{strategy_mode} Portfolio", linewidth=2.5, color="#2E86AB")
         ax.plot(bench_norm.index, bench_norm.values, label=f"{benchmark_name} (Benchmark)", linewidth=2, color="#A23B72", alpha=0.9)
 
-        # Shade VIX backwardation regions
-        if hammer_result.vix_slope is not None:
-            blocked = get_blocked_regions(hammer_result.vix_slope)
+        # Shade VIX backwardation regions (only for HAMMER mode)
+        if strategy_result.vix_slope is not None and strategy_mode == "HAMMER":
+            blocked = get_blocked_regions(strategy_result.vix_slope)
 
             for _, row in blocked.iterrows():
                 ax.axvspan(row["start"], row["end"], alpha=0.15, color="red", label="_nolegend_")
@@ -324,18 +338,34 @@ class HammerView(QWidget):
                 ax.axvspan(blocked.iloc[0]["start"], blocked.iloc[0]["start"],
                           alpha=0.15, color="red", label="VIX Inverted (Rebal Blocked)")
 
-        # Mark partial rebalance events
-        partial_events = hammer_result.partial_events
+        # Mark blocked and partial rebalance events
+        blocked_events = strategy_result.blocked_events
+        partial_events = strategy_result.partial_events
+
+        # Show blocked events (triangles pointing down)
+        if blocked_events:
+            blocked_dates = [e.date for e in blocked_events]
+            blocked_values = []
+            for d in blocked_dates:
+                try:
+                    blocked_values.append(strategy_norm.loc[pd.Timestamp(d)])
+                except KeyError:
+                    blocked_values.append(None)
+            valid_blocked = [(d, v) for d, v in zip(blocked_dates, blocked_values) if v is not None]
+            if valid_blocked:
+                plot_dates, plot_values = zip(*valid_blocked)
+                ax.scatter(plot_dates, plot_values, marker="v", s=50, color="red",
+                          label=f"Rebalance Blocked ({len(blocked_events)})", zorder=5)
+
+        # Show partial events (triangles pointing up)
         if partial_events:
             partial_dates = [e.date for e in partial_events]
-            # Look up values using proper Timestamp conversion for DatetimeIndex
             partial_values = []
             for d in partial_dates:
                 try:
-                    partial_values.append(hammer_norm.loc[pd.Timestamp(d)])
+                    partial_values.append(strategy_norm.loc[pd.Timestamp(d)])
                 except KeyError:
                     partial_values.append(None)
-            # Filter both dates and values together to avoid length mismatch
             valid_points = [(d, v) for d, v in zip(partial_dates, partial_values) if v is not None]
             if valid_points:
                 plot_dates, plot_values = zip(*valid_points)
@@ -348,9 +378,9 @@ class HammerView(QWidget):
         ax.grid(True, alpha=0.3)
 
         # Format final values annotation
-        final_hammer = hammer_norm.iloc[-1]
+        final_strategy = strategy_norm.iloc[-1]
         final_bench = bench_norm.iloc[-1]
-        ax.annotate(f"${final_hammer:.0f}", xy=(hammer_norm.index[-1], final_hammer),
+        ax.annotate(f"${final_strategy:.0f}", xy=(strategy_norm.index[-1], final_strategy),
                    xytext=(5, 5), textcoords="offset points", fontsize=9, color="#2E86AB", fontweight="bold")
         ax.annotate(f"${final_bench:.0f}", xy=(bench_norm.index[-1], final_bench),
                    xytext=(5, -10), textcoords="offset points", fontsize=9, color="#A23B72", fontweight="bold")
