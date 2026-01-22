@@ -1,0 +1,108 @@
+{
+  "models": {
+    "GC Conservative": {
+      "description": "35/55/10 Equity/Bond/Alt. Conservative allocation.",
+      "holdings": {
+        "VOO": 0.2,
+        "IJR": 0.05,
+        "NEAR": 0.2,
+        "BOND": 0.35,
+        "TLT": 0.1,
+        "QLEIX": 0.05,
+        "VEMBX": 0.04,
+        "PDBC": 0.01
+      }
+    },
+    "GC Moderately Conservative": {
+      "description": "45/45/10 Equity/Bond/Alt. Moderately conservative allocation.",
+      "holdings": {
+        "VOO": 0.3,
+        "IJR": 0.07,
+        "NEAR": 0.1,
+        "BOND": 0.35,
+        "TLT": 0.1,
+        "QLEIX": 0.04,
+        "VEMBX": 0.03,
+        "PDBC": 0.01
+      }
+    },
+    "GC Moderate": {
+      "description": "55/35/10 Equity/Bond/Alt. Balanced allocation.",
+      "holdings": {
+        "VOO": 0.4,
+        "IJR": 0.1,
+        "NEAR": 0.05,
+        "BOND": 0.28,
+        "TLT": 0.07,
+        "QLEIX": 0.05,
+        "VEMBX": 0.04,
+        "PDBC": 0.01
+      }
+    },
+    "GC Moderately Aggressive": {
+      "description": "65/25/10 Equity/Bond/Alt. Growth-tilted allocation.",
+      "holdings": {
+        "VOO": 0.5,
+        "IJR": 0.12,
+        "NEAR": 0.03,
+        "BOND": 0.22,
+        "TLT": 0.05,
+        "QLEIX": 0.05,
+        "VEMBX": 0.02,
+        "PDBC": 0.01
+      }
+    },
+    "GC Aggressive": {
+      "description": "75/15/10 Equity/Bond/Alt. Maximum growth allocation.",
+      "holdings": {
+        "VOO": 0.58,
+        "IJR": 0.15,
+        "NEAR": 0.02,
+        "BOND": 0.16,
+        "TLT": 0.03,
+        "QLEIX": 0.04,
+        "VEMBX": 0.01,
+        "PDBC": 0.01
+      }
+    },
+    "Three Fund Portfolio": {
+      "description": "Bogleheads classic. Simple, diversified, low-cost.",
+      "holdings": {
+        "VTI": 0.5,
+        "VXUS": 0.3,
+        "BND": 0.2
+      }
+    },
+    "All Weather": {
+      "description": "Ray Dalio inspired. Designed for any economic environment.",
+      "holdings": {
+        "VTI": 0.3,
+        "TLT": 0.4,
+        "IEF": 0.15,
+        "GLD": 0.075,
+        "DBC": 0.075
+      }
+    },
+    "GC HAMMER Max Growth": {
+      "description": "85/5/10 Equity/Bond/Alt. Aggressive growth.",
+      "holdings": {
+        "COWZ": 0.35,
+        "QQQ": 0.35,
+        "VYMI": 0.15,
+        "QLEIX": 0.1,
+        "BOND": 0.05
+      }
+    },
+    "GC HAMMER 60/40": {
+      "description": "Classic 60/40 with GC equity sleeve.",
+      "holdings": {
+        "BOND": 0.28,
+        "QQQ": 0.26,
+        "COWZ": 0.26,
+        "QLEIX": 0.1,
+        "VYMI": 0.08,
+        "SHV": 0.02
+      }
+    }
+  }
+}

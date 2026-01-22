@@ -11,6 +11,7 @@ from .views.economic_view import EconomicView
 from .views.cma_view import CMAView
 from .views.risk_view import RiskView
 from .views.portfolio_view import PortfolioView
+from .views.model_manager_view import ModelManagerView
 from .views.monte_view import MonteCarloView
 from .views.estate_view import EstateView
 from .views.reports_view import ReportsView
@@ -24,6 +25,7 @@ SECTIONS = [
     ("Capital Market Assumptions", CMAView),
     ("Risk Tolerance", RiskView),
     ("Portfolio Builder", PortfolioView),
+    ("Model Manager", ModelManagerView),
     ("Monte Carlo & Cashflows", MonteCarloView),
     ("Tax & Estate", EstateView),
     ("Reports", ReportsView),
@@ -78,6 +80,9 @@ class MainWindow(QMainWindow):
         self.sidebar.currentRowChanged.connect(self.stack.setCurrentIndex)
         self.sidebar.setCurrentRow(0)
 
+        # Connect Model Manager to Portfolio Builder
+        self._connect_model_signals()
+
         outer.addWidget(self.sidebar)
         outer.addWidget(self.stack, 1)
         self.setCentralWidget(central)
@@ -88,6 +93,20 @@ class MainWindow(QMainWindow):
                 set_current_client(clients[0])  # newest-first from your store
         except Exception:
             pass
+
+    def _connect_model_signals(self):
+        """Connect Model Manager signals to Portfolio Builder."""
+        portfolio_view = None
+        model_manager = None
+
+        for view in self.views:
+            if isinstance(view, PortfolioView):
+                portfolio_view = view
+            elif isinstance(view, ModelManagerView):
+                model_manager = view
+
+        if portfolio_view and model_manager:
+            model_manager.models_changed.connect(portfolio_view.reload_models)
 
 def launch_app():
     app = QApplication(sys.argv)
