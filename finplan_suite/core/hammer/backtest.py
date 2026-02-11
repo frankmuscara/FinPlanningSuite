@@ -117,9 +117,19 @@ class BacktestEngine:
         self,
         portfolio_config: PortfolioConfig,
         strategy_config: StrategyConfig,
+        override_blocked_dates: Optional[set] = None,
     ):
+        """Initialize backtest engine.
+
+        Args:
+            portfolio_config: Portfolio configuration
+            strategy_config: Strategy configuration
+            override_blocked_dates: If provided, these dates will be blocked
+                instead of using VIX-based blocking. Used for permutation tests.
+        """
         self.portfolio_config = portfolio_config
         self.strategy_config = strategy_config
+        self.override_blocked_dates = override_blocked_dates
 
     def run(self) -> BacktestResult:
         """Execute the backtest.
@@ -200,8 +210,15 @@ class BacktestEngine:
             # Check VIX gate (HAMMER and SHIELD modes)
             vix_blocked = False
             current_vix_slope = None
+            current_date_val = current_date.date() if hasattr(current_date, "date") else current_date
+
             if should_rebalance and strategy.mode in (StrategyMode.HAMMER, StrategyMode.SHIELD):
-                if vix_slope is not None:
+                # If override_blocked_dates is set, use it instead of VIX
+                if self.override_blocked_dates is not None:
+                    vix_blocked = current_date_val in self.override_blocked_dates
+                    if vix_slope is not None:
+                        current_vix_slope = vix_slope.loc[current_date]
+                elif vix_slope is not None:
                     current_vix_slope = vix_slope.loc[current_date]
                     vix_blocked = is_vix_blocked(current_vix_slope)
 
