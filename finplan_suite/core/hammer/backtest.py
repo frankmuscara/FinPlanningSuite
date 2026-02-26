@@ -18,7 +18,8 @@ from .strategies import (
     check_rebalance_trigger,
 )
 from .vix import fetch_vix_data, is_vix_blocked
-from .data import fetch_prices, validate_prices
+from .data import fetch_prices, validate_prices, get_common_date_range
+from .asset_classes import AssetClass, get_asset_class
 
 
 @dataclass
@@ -55,11 +56,12 @@ class BacktestResult:
     data_coverage: Dict[str, Tuple[date, date]]
     effective_start: date
     effective_end: date
+    data_warnings: List[str] = field(default_factory=list)
 
     @property
     def rebalance_events(self) -> List[RebalanceEvent]:
-        """Get only rebalance events (excluding blocked)."""
-        return [e for e in self.events if e.event_type == "rebalance"]
+        """Get executed rebalance events (excluding blocked, including partial)."""
+        return [e for e in self.events if e.event_type in ("rebalance", "partial")]
     
     @property
     def blocked_events(self) -> List[RebalanceEvent]:
@@ -82,10 +84,40 @@ class BacktestResult:
         years = (self.effective_end - self.effective_start).days / 365.25
         if years <= 0:
             return 0
-        # Exclude initial investment
-        actual_rebalances = len([e for e in self.rebalance_events
-                                 if e.event_type != "initial"])
+        actual_rebalances = len(self.rebalance_events)
         return actual_rebalances / years
+
+
+def _build_partial_hammer_targets(
+    old_weights: Dict[str, float],
+    target_weights: Dict[str, float],
+) -> Dict[str, float]:
+    """Build HAMMER partial targets: freeze intra-equity, allow inter-asset shifts."""
+    equity_tickers = [
+        t for t in target_weights.keys()
+        if get_asset_class(t) == AssetClass.EQUITY
+    ]
+    non_equity_tickers = [t for t in target_weights.keys() if t not in equity_tickers]
+
+    eq_target_total = float(sum(target_weights.get(t, 0.0) for t in equity_tickers))
+    old_eq_total = float(sum(old_weights.get(t, 0.0) for t in equity_tickers))
+
+    partial = {t: float(target_weights.get(t, 0.0)) for t in non_equity_tickers}
+
+    if equity_tickers:
+        if old_eq_total > 0:
+            for t in equity_tickers:
+                rel = float(old_weights.get(t, 0.0)) / old_eq_total
+                partial[t] = eq_target_total * rel
+        else:
+            # No existing equity sleeve to freeze; fall back to target split.
+            for t in equity_tickers:
+                partial[t] = float(target_weights.get(t, 0.0))
+
+    total = float(sum(partial.values()))
+    if total > 0:
+        partial = {t: w / total for t, w in partial.items()}
+    return partial
 
     def to_dataframe(self) -> pd.DataFrame:
         """Export results as a DataFrame for CSV export."""
@@ -147,11 +179,31 @@ class BacktestEngine:
             config.start_date,
             config.end_date,
         )
+        data_warnings: List[str] = []
+
+        late_assets = []
+        for ticker in all_tickers:
+            start_cov = coverage.get(ticker, (None, None))[0]
+            if start_cov is not None and start_cov > config.start_date:
+                late_assets.append((ticker, start_cov))
+        if late_assets:
+            for ticker, start_cov in late_assets:
+                data_warnings.append(
+                    f"{ticker} inception/data starts at {start_cov} after requested backtest start {config.start_date}."
+                )
+
+        common_start, _ = get_common_date_range(coverage)
+        if common_start is not None and common_start > config.start_date:
+            prices = prices.loc[common_start.isoformat():]
+            data_warnings.append(
+                f"Backtest start adjusted to {common_start} to avoid synthetic pre-inception history."
+            )
 
         # Validate
         issues = validate_prices(prices)
         if issues["errors"]:
             raise ValueError(f"Data errors: {issues['errors']}")
+        data_warnings.extend(issues.get("warnings", []))
 
         # 2. Fetch VIX data if needed (for HAMMER and SHIELD modes)
         vix_slope = None
@@ -212,7 +264,11 @@ class BacktestEngine:
             current_vix_slope = None
             current_date_val = current_date.date() if hasattr(current_date, "date") else current_date
 
-            if should_rebalance and strategy.mode in (StrategyMode.HAMMER, StrategyMode.SHIELD):
+            if (
+                should_rebalance
+                and not is_first_day
+                and strategy.mode in (StrategyMode.HAMMER, StrategyMode.SHIELD)
+            ):
                 # If override_blocked_dates is set, use it instead of VIX
                 if self.override_blocked_dates is not None:
                     vix_blocked = current_date_val in self.override_blocked_dates
@@ -230,7 +286,7 @@ class BacktestEngine:
                 pending_rebalance_blocked = False
 
             # Execute rebalance or record blocked event
-            if should_rebalance and vix_blocked:
+            if should_rebalance and vix_blocked and strategy.mode == StrategyMode.SHIELD:
                 # Only record blocked event if this is a NEW rebalance attempt
                 # (not a continuation of an existing blocked state)
                 if not pending_rebalance_blocked:
@@ -244,6 +300,27 @@ class BacktestEngine:
                         reason="VIX curve inverted",
                     ))
                     pending_rebalance_blocked = True
+
+            elif should_rebalance and vix_blocked and strategy.mode == StrategyMode.HAMMER:
+                partial_targets = _build_partial_hammer_targets(old_weights, config.target_weights)
+                new_position = position.rebalance_to(
+                    partial_targets,
+                    current_prices,
+                    portfolio_value,
+                )
+                turnover = calculate_turnover(old_weights, partial_targets)
+                events.append(RebalanceEvent(
+                    date=current_date.date() if hasattr(current_date, "date") else current_date,
+                    event_type="partial",
+                    old_weights=old_weights,
+                    new_weights=partial_targets,
+                    turnover=turnover,
+                    vix_slope=current_vix_slope,
+                    reason="VIX inverted: equity sleeve frozen, inter-asset rebalance allowed",
+                ))
+                position = new_position
+                portfolio_value = position.value(current_prices)
+                pending_rebalance_blocked = False
 
             elif should_rebalance:
                 # Execute rebalance
@@ -299,4 +376,5 @@ class BacktestEngine:
             data_coverage=coverage,
             effective_start=effective_start,
             effective_end=effective_end,
+            data_warnings=data_warnings,
         )

@@ -9,7 +9,9 @@ from datetime import date
 from typing import Dict, List, Optional, Tuple
 import json
 import os
+import calendar
 import pandas as pd
+from .paths import data_dir, data_file
 
 from finplan_suite.core.hammer import (
     PortfolioConfig,
@@ -26,9 +28,16 @@ from finplan_suite.core.hammer.strategies import RebalanceFrequency
 
 
 # Path for storing backtest results
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data")
-HAMMER_MODELS_DIR = os.path.join(DATA_DIR, "hammer_models")
-BACKTEST_CACHE_DIR = os.path.join(DATA_DIR, "backtest_results")
+DATA_DIR = str(data_dir())
+HAMMER_MODELS_DIR = str(data_dir("hammer_models"))
+BACKTEST_CACHE_DIR = str(data_dir("backtest_results"))
+
+
+def _years_back_safe(d: date, years: int) -> date:
+    """Subtract years while preserving a valid calendar date."""
+    year = d.year - years
+    day = min(d.day, calendar.monthrange(year, d.month)[1])
+    return date(year, d.month, day)
 
 
 def ensure_dirs():
@@ -49,7 +58,7 @@ def cma_to_hammer_inputs(
         Tuple of (tickers, expected_returns_dict, risk_free_rate)
     """
     if cma_path is None:
-        cma_path = os.path.join(DATA_DIR, "cma.json")
+        cma_path = str(data_file("cma.json"))
 
     with open(cma_path) as f:
         cma = json.load(f)
@@ -89,7 +98,7 @@ def portfolio_weights_to_hammer_config(
     if end_date is None:
         end_date = date.today()
     if start_date is None:
-        start_date = date(end_date.year - 10, end_date.month, end_date.day)
+        start_date = _years_back_safe(end_date, 10)
 
     # Filter to only tickers with non-zero weights
     active_weights = {t: w for t, w in weights.items() if w > 0}

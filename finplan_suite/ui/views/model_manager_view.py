@@ -4,6 +4,7 @@
 import json
 import os
 from typing import Dict, Optional
+from ...core.paths import data_dir, data_file
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget,
@@ -15,8 +16,8 @@ from PyQt6.QtGui import QColor
 
 
 # Path to models config
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "data")
-MODELS_FILE = os.path.join(DATA_DIR, "models.json")
+DATA_DIR = str(data_dir())
+MODELS_FILE = str(data_file("models.json"))
 
 
 def load_models() -> Dict[str, dict]:

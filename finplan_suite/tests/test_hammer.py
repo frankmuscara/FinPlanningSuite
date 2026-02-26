@@ -10,6 +10,7 @@ sys.modules['yfinance'] = MagicMock()
 
 import pandas as pd
 import numpy as np
+from unittest.mock import patch
 
 
 class TestAssetClasses:
@@ -95,6 +96,115 @@ class TestBacktestResult:
 
         assert len(result.blocked_events) == 1
         assert len(result.partial_events) == 1
+
+
+class TestBacktestEngineBehavior:
+    def test_initial_investment_not_blocked_by_vix(self):
+        from finplan_suite.core.hammer.backtest import BacktestEngine
+        from finplan_suite.core.hammer.portfolio import PortfolioConfig
+        from finplan_suite.core.hammer.strategies import StrategyConfig, StrategyMode
+
+        dates = pd.date_range("2024-01-01", periods=5, freq="B")
+        prices = pd.DataFrame(
+            {
+                "VOO": [100, 101, 102, 103, 104],
+                "BND": [100, 100, 100, 100, 100],
+                "SPY": [100, 100, 100, 100, 100],
+            },
+            index=dates,
+        )
+        coverage = {k: (dates[0].date(), dates[-1].date()) for k in prices.columns}
+        neg_slope = pd.Series(-1.0, index=dates)
+
+        config = PortfolioConfig(
+            tickers=["VOO", "BND"],
+            target_weights={"VOO": 0.5, "BND": 0.5},
+            benchmark="SPY",
+            initial_capital=100000,
+            start_date=dates[0].date(),
+            end_date=dates[-1].date(),
+        )
+        strategy = StrategyConfig(mode=StrategyMode.HAMMER, drift_threshold=0.01)
+
+        with patch("finplan_suite.core.hammer.backtest.fetch_prices", return_value=(prices, coverage)), patch(
+            "finplan_suite.core.hammer.backtest.fetch_vix_data", return_value=(neg_slope, neg_slope, neg_slope)
+        ):
+            result = BacktestEngine(config, strategy).run()
+
+        assert result.nav.iloc[0] == pytest.approx(100000)
+        assert result.nav.iloc[1] > 0
+        assert any(e.event_type == "initial" for e in result.events)
+
+    def test_hammer_generates_partial_events_under_vix_block(self):
+        from finplan_suite.core.hammer.backtest import BacktestEngine
+        from finplan_suite.core.hammer.portfolio import PortfolioConfig
+        from finplan_suite.core.hammer.strategies import StrategyConfig, StrategyMode
+
+        dates = pd.date_range("2024-01-01", periods=8, freq="B")
+        prices = pd.DataFrame(
+            {
+                "VOO": [100, 110, 120, 130, 140, 150, 160, 170],
+                "BND": [100, 100, 100, 100, 100, 100, 100, 100],
+                "SPY": [100, 101, 102, 103, 104, 105, 106, 107],
+            },
+            index=dates,
+        )
+        coverage = {k: (dates[0].date(), dates[-1].date()) for k in prices.columns}
+        neg_slope = pd.Series(-1.0, index=dates)
+
+        config = PortfolioConfig(
+            tickers=["VOO", "BND"],
+            target_weights={"VOO": 0.5, "BND": 0.5},
+            benchmark="SPY",
+            initial_capital=100000,
+            start_date=dates[0].date(),
+            end_date=dates[-1].date(),
+        )
+        strategy = StrategyConfig(mode=StrategyMode.HAMMER, drift_threshold=0.01)
+
+        with patch("finplan_suite.core.hammer.backtest.fetch_prices", return_value=(prices, coverage)), patch(
+            "finplan_suite.core.hammer.backtest.fetch_vix_data", return_value=(neg_slope, neg_slope, neg_slope)
+        ):
+            result = BacktestEngine(config, strategy).run()
+
+        assert len(result.partial_events) >= 1
+        assert all(e.event_type != "blocked" for e in result.partial_events)
+
+    def test_warn_and_adjust_start_for_late_inception(self):
+        from finplan_suite.core.hammer.backtest import BacktestEngine
+        from finplan_suite.core.hammer.portfolio import PortfolioConfig
+        from finplan_suite.core.hammer.strategies import StrategyConfig, StrategyMode
+
+        dates = pd.date_range("2024-01-01", periods=6, freq="B")
+        prices = pd.DataFrame(
+            {
+                "AAA": [100, 101, 102, 103, 104, 105],
+                "BBB": [50, 50, 50, 51, 52, 53],
+                "SPY": [100, 100, 100, 100, 100, 100],
+            },
+            index=dates,
+        )
+        coverage = {
+            "AAA": (dates[0].date(), dates[-1].date()),
+            "BBB": (dates[2].date(), dates[-1].date()),
+            "SPY": (dates[0].date(), dates[-1].date()),
+        }
+
+        config = PortfolioConfig(
+            tickers=["AAA", "BBB"],
+            target_weights={"AAA": 0.5, "BBB": 0.5},
+            benchmark="SPY",
+            initial_capital=100000,
+            start_date=dates[0].date(),
+            end_date=dates[-1].date(),
+        )
+        strategy = StrategyConfig(mode=StrategyMode.DRIFT, drift_threshold=0.5)
+
+        with patch("finplan_suite.core.hammer.backtest.fetch_prices", return_value=(prices, coverage)):
+            result = BacktestEngine(config, strategy).run()
+
+        assert result.effective_start == dates[2].date()
+        assert any("BBB inception/data starts at" in w for w in result.data_warnings)
 
 
 if __name__ == '__main__':

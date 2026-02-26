@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import (
+﻿from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QSpinBox, QComboBox,
     QTextEdit, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox
 )
@@ -163,9 +163,8 @@ class ClientProfileView(QWidget):
         if r >= 0: self.tbl.removeRow(r)
 
     def update_tax_status(self, acct_type):
-            status = ACCOUNT_TYPES.get(acct_type, "Unknown")
-            self.tax_status_lbl.setText(status)
-            self.client_data["tax_status"] = status  # if you’re storing in dict/object
+        return ACCOUNT_TYPES.get(acct_type, "Unknown")
+
     def _make_type_combo(self, row: int) -> QComboBox:
         cb = QComboBox(self.tbl)
         cb.addItems(ACCOUNT_TYPES.keys())
@@ -263,4 +262,5 @@ class ClientProfileView(QWidget):
             # Optional: log to console to see the real cause
             print(f"[collect_from_form] error: {e}")
             return None
+
 

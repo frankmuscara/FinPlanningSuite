@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import (
+﻿from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QListWidget,
     QListWidgetItem, QStackedWidget, QToolBar, QPushButton, QLineEdit
 )
@@ -34,7 +34,7 @@ SECTIONS = [
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("FinPlan Suite — Advisor Prototype")
+        self.setWindowTitle("FinPlan Suite - Advisor Prototype")
         self.resize(1200, 800)
 
         # Top toolbar
@@ -43,7 +43,7 @@ class MainWindow(QMainWindow):
         self.addToolBar(toolbar)
 
         self.clientSearch = QLineEdit()
-        self.clientSearch.setPlaceholderText("Search clients…")
+        self.clientSearch.setPlaceholderText("Search clients...")
         self.clientSearch.setFixedWidth(240)
         toolbar.addWidget(self.clientSearch)
         toolbar.addSeparator()
@@ -113,3 +113,4 @@ def launch_app():
     win = MainWindow()
     win.show()
     sys.exit(app.exec())
+

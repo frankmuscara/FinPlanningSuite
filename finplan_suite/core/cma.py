@@ -15,8 +15,8 @@ Exports:
 from dataclasses import dataclass
 import numpy as np
 import json, os, time, datetime
-from pathlib import Path
 from typing import Optional
+from .paths import data_dir, data_file
 
 # ---------- Universe ----------
 
@@ -264,7 +264,7 @@ def derive_cma_from_macro(
 def _ensure_dirs(path: str):
     os.makedirs(os.path.dirname(path), exist_ok=True)
 
-def save_cma_json(cma: CMA, path: str = "data/cma.json"):
+def save_cma_json(cma: CMA, path: str = str(data_file("cma.json"))):
     """Save current CMA to data/cma.json AND a timestamped copy in data/cma_history/."""
     _ensure_dirs(path)
     obj = {
@@ -280,8 +280,7 @@ def save_cma_json(cma: CMA, path: str = "data/cma.json"):
         json.dump(obj, f, indent=2)
 
     # history
-    hist_dir = Path("data/cma_history")
-    hist_dir.mkdir(parents=True, exist_ok=True)
+    hist_dir = data_dir("cma_history")
     ts = time.strftime("%Y%m%d-%H%M%S")
     as_of = (cma.meta or {}).get("as_of", datetime.date.today().isoformat())
     method = (cma.meta or {}).get("method_version", "v1")
@@ -289,7 +288,7 @@ def save_cma_json(cma: CMA, path: str = "data/cma.json"):
     with open(hist_path, "w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2)
 
-def load_cma_json(path: str = "data/cma.json") -> Optional[CMA]:
+def load_cma_json(path: str = str(data_file("cma.json"))) -> Optional[CMA]:
     """Load a CMA from JSON. Returns a CMA or None if file doesn't exist."""
     if not os.path.exists(path):
         return None

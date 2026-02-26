@@ -1,4 +1,4 @@
-# finplan_suite/ui/views/monte_view.py
+﻿# finplan_suite/ui/views/monte_view.py
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFormLayout, QLineEdit,
     QPushButton, QSpinBox, QDoubleSpinBox, QGroupBox, QGridLayout, QTableWidget,
@@ -14,6 +14,7 @@ from matplotlib.figure import Figure
 from ...core.cma import load_cma_json, derive_cma_from_macro, CMA
 from ...core.monte_carlo import MCInputs, simulate_paths
 from ...core.store import list_clients
+from ...core.paths import data_file
 
 def fmt_money(x):  # simple formatter
     return f"${x:,.0f}"
@@ -77,8 +78,8 @@ class MonteCarloView(QWidget):
         form.addWidget(QLabel("Inflation (annual, dec)"), r, 0);  form.addWidget(self.in_infl, r, 1); r+=1
 
         form.addWidget(QLabel("<b>Return Model</b>"), r, 0, 1, 2); r+=1
-        form.addWidget(QLabel("Expected return (μ)"), r, 0);      form.addWidget(self.in_mu, r, 1); r+=1
-        form.addWidget(QLabel("Std dev (σ)"), r, 0);              form.addWidget(self.in_sigma, r, 1); r+=1
+        form.addWidget(QLabel("Expected return (mu)"), r, 0);      form.addWidget(self.in_mu, r, 1); r+=1
+        form.addWidget(QLabel("Std dev (sigma)"), r, 0);              form.addWidget(self.in_sigma, r, 1); r+=1
         form.addWidget(QLabel("Trials"), r, 0);                   form.addWidget(self.in_trials, r, 1); r+=1
         form.addWidget(self.btn_load_port, r, 0, 1, 2); r+=1
 
@@ -89,7 +90,7 @@ class MonteCarloView(QWidget):
         self.btn_run = QPushButton("Run Simulation")
         self.btn_run.clicked.connect(self.run_sim)
         run_row.addWidget(self.btn_run)
-        self.lbl_headline = QLabel("Success: —   |   Ruin: —")
+        self.lbl_headline = QLabel("Success: -   |   Ruin: -")
         run_row.addStretch(1)
         run_row.addWidget(self.lbl_headline)
         root.addLayout(run_row)
@@ -112,17 +113,17 @@ class MonteCarloView(QWidget):
         self.load_selected_portfolio()
     def load_cma_or_default(self) -> CMA:
 
-        cma = load_cma_json(path="data/cma.json")
+        cma = load_cma_json(path=str(data_file("cma.json")))
         if cma is None:
-        # Fallback baseline if Economic → CMA hasn't been saved yet
+        # Fallback baseline if Economic -> CMA has not been saved yet
             cma = derive_cma_from_macro(gdp=0.017, cpi=0.025, real_short=0.010, term_premium=0.015)
         return cma
     # --------------------------
-    # Load selected portfolio -> sets mu, sigma from CMA & weights
+        # Load selected portfolio -> sets mu, sigma from CMA and weights
     def load_selected_portfolio(self):
-        path = os.path.join("data", "selected_portfolio.json")
+        path = str(data_file("selected_portfolio.json"))
         if not os.path.exists(path):
-            self.lbl_headline.setText("Success: —   |   Ruin: —    (Tip: set μ & σ manually or send from Portfolio Builder)")
+            self.lbl_headline.setText("Success: -   |   Ruin: -    (Tip: set mu and sigma manually or send from Portfolio Builder)")
             return
 
         try:
@@ -135,13 +136,23 @@ class MonteCarloView(QWidget):
         # Map weights to current CMA order (safety)
         tickers = obj.get("tickers", [])
         weights = np.array(obj.get("weights", []), dtype=float)
-        order = [self.cma.tickers.index(t) for t in tickers]
         w_full = np.zeros(len(self.cma.tickers))
-        for src_idx, tgt_idx in enumerate(order):
-            w_full[tgt_idx] = weights[src_idx]
+        missing = []
+        for ticker, weight in zip(tickers, weights):
+            if ticker in self.cma.tickers:
+                tgt_idx = self.cma.tickers.index(ticker)
+                w_full[tgt_idx] = weight
+            else:
+                missing.append(ticker)
+
+        if missing:
+            missing_list = ", ".join(missing)
+            self.lbl_headline.setText(
+                f"Missing from CMA: {missing_list}. Using available tickers only."
+            )
         w_full = w_full / (w_full.sum() if w_full.sum() > 0 else 1.0)
 
-        # Portfolio μ, σ from CMA
+        # Portfolio mu, sigma from CMA
         mu = float(self.cma.exp_returns @ w_full)
         sigma = float(np.sqrt(w_full @ self.cma.cov @ w_full))
 
@@ -174,12 +185,12 @@ class MonteCarloView(QWidget):
         ruin = out["ruin_rate"] * 100.0
         self.lbl_headline.setText(f"Success: {succ:.1f}%   |   Ruin: {ruin:.1f}%")
 
-        # Plot fan (mean + 5–95%)
+        # Plot fan (mean + 5-95%)
         self.fig.clear()
         ax = self.fig.add_subplot(111)
         yrs = out["years"]
         ax.plot(yrs, out["mean_path"], "k", lw=2.5, label="Mean")
-        ax.fill_between(yrs, out["p5_path"], out["p95_path"], alpha=0.22, label="5th–95th %")
+        ax.fill_between(yrs, out["p5_path"], out["p95_path"], alpha=0.22, label="5th-95th %")
         ax.set_xlabel("Years from Today")
         ax.set_ylabel("Portfolio Value ($)")
         ax.set_title("Monte Carlo Simulation")
@@ -215,7 +226,7 @@ class MonteCarloView(QWidget):
 
     def _read_selected_portfolio(self):
         """Read data/selected_portfolio.json if it exists (from Portfolio tab)."""
-        path = os.path.join("data", "selected_portfolio.json")
+        path = str(data_file("selected_portfolio.json"))
         if not os.path.exists(path):
             return None
         with open(path, "r", encoding="utf-8") as f:
@@ -223,7 +234,7 @@ class MonteCarloView(QWidget):
 
     def _portfolio_return_risk_fallback(self):
         """If no selected portfolio, use CMA with equal weights."""
-        cma = load_cma_json(path="data/cma.json")
+        cma = load_cma_json(path=str(data_file("cma.json")))
         if cma is None:
             return 0.05, 0.10  # mild defaults
         n = len(cma.tickers)
@@ -271,7 +282,7 @@ class MonteCarloView(QWidget):
         # Horizon
         years_total = self._years_to_model(age, 95)
 
-        # Portfolio μ/σ from selected portfolio, or CMA fallback
+        # Portfolio mu/sigma from selected portfolio, or CMA fallback
         sel = self._read_selected_portfolio()
         if sel:
             exp_ret = float(sel.get("expected_return", 0.05))  # decimal
@@ -279,7 +290,7 @@ class MonteCarloView(QWidget):
         else:
             exp_ret, risk = self._portfolio_return_risk_fallback()
 
-        # Inflation (decimal) — later: wire to CPI forecast
+        # Inflation (decimal) - later: wire to CPI forecast
         inflation = 0.025
 
         # Defaults for now (later: wire client cash flows if you capture them)
@@ -301,3 +312,4 @@ class MonteCarloView(QWidget):
         self.in_sigma.setValue(float(risk))      # decimal
 
         self.lbl_headline.setText("Loaded assumptions from Client Profile (and Portfolio/CMA).")
+

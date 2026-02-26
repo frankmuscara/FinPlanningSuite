@@ -303,6 +303,14 @@ class HammerView(QWidget):
         # Plot results
         self._plot_results(strategy_result)
 
+        if getattr(strategy_result, "data_warnings", None):
+            warn_text = "\n".join(strategy_result.data_warnings)
+            QMessageBox.warning(
+                self,
+                "Backtest Data Warnings",
+                f"Please review before presenting results:\n\n{warn_text}",
+            )
+
     def _on_backtest_error(self, error_msg):
         """Handle backtest error."""
         self.btn_run.setEnabled(True)

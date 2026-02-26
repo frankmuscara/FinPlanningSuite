@@ -4,6 +4,7 @@
 import json
 import os
 from typing import Dict, List, Optional
+from ...core.paths import data_dir, data_file
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTableWidget,
@@ -23,8 +24,8 @@ from .hammer_view import HammerView
 
 
 # Path to models config
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), "data")
-MODELS_FILE = os.path.join(DATA_DIR, "models.json")
+DATA_DIR = str(data_dir())
+MODELS_FILE = str(data_file("models.json"))
 
 
 def load_models() -> Dict[str, dict]:
@@ -108,7 +109,7 @@ class PortfolioView(QWidget):
 
     def _load_cma_or_default(self) -> CMA:
         """Load CMA or create default."""
-        cma = load_cma_json(path=os.path.join(DATA_DIR, "cma.json"))
+        cma = load_cma_json(path=str(data_file("cma.json")))
         if cma is None:
             from ...core.cma import derive_cma_from_macro
             cma = derive_cma_from_macro(gdp=0.017, cpi=0.025, real_short=0.01, term_premium=0.015)
@@ -609,7 +610,7 @@ class PortfolioView(QWidget):
         }
 
         os.makedirs(DATA_DIR, exist_ok=True)
-        path = os.path.join(DATA_DIR, "selected_portfolio.json")
+        path = str(data_file("selected_portfolio.json"))
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
 

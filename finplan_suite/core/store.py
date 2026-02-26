@@ -3,9 +3,9 @@ from __future__ import annotations
 import os, json, uuid, datetime, csv
 from dataclasses import dataclass, asdict, field
 from typing import Optional, List, Dict, Any
+from .paths import data_dir
 
-DATA_DIR = "data/clients"
-os.makedirs(DATA_DIR, exist_ok=True)
+DATA_DIR = str(data_dir("clients"))
 
 @dataclass
 class Client:

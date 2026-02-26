@@ -95,9 +95,9 @@ def fetch_prices(
     # Validate no remaining NaNs in critical period
     remaining_nans = prices.isna().sum()
     if remaining_nans.any():
-        problem_tickers = remaining_nans[remaining_nans > 0].index.tolist()
-        # Fill remaining with last valid or drop
-        prices = prices.ffill().bfill()
+        # Keep NaNs as-is so caller can detect late inception/missing history
+        # without introducing look-ahead bias from backward fills.
+        pass
 
     return prices, coverage
 
@@ -118,6 +118,11 @@ def validate_prices(prices: pd.DataFrame) -> Dict[str, List[str]]:
     if (prices == 0).any().any():
         zero_tickers = prices.columns[(prices == 0).any()].tolist()
         issues["warnings"].append(f"Zero prices found: {zero_tickers}")
+
+    # Check for missing prices
+    if prices.isna().any().any():
+        nan_tickers = prices.columns[prices.isna().any()].tolist()
+        issues["errors"].append(f"Missing prices found: {nan_tickers}")
 
     # Check for extreme moves (>50% in one day)
     returns = prices.pct_change()
