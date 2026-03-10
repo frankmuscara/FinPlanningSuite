@@ -87,6 +87,28 @@ class BacktestResult:
         actual_rebalances = len(self.rebalance_events)
         return actual_rebalances / years
 
+    def to_dataframe(self) -> pd.DataFrame:
+        """Export results as a DataFrame for CSV export."""
+        df = pd.DataFrame(index=self.nav.index)
+        df["portfolio_nav"] = self.nav
+        df["benchmark_nav"] = self.benchmark_nav
+
+        # Add weights
+        for ticker in self.weights.columns:
+            df[f"{ticker}_weight"] = self.weights[ticker]
+
+        # Add VIX slope if available
+        if self.vix_slope is not None:
+            df["vix_slope"] = self.vix_slope
+
+        # Add event column
+        event_dates = {e.date: e.event_type for e in self.events}
+        df["event"] = df.index.map(
+            lambda d: event_dates.get(d.date() if hasattr(d, "date") else d, "")
+        )
+
+        return df
+
 
 def _build_partial_hammer_targets(
     old_weights: Dict[str, float],
@@ -118,28 +140,6 @@ def _build_partial_hammer_targets(
     if total > 0:
         partial = {t: w / total for t, w in partial.items()}
     return partial
-
-    def to_dataframe(self) -> pd.DataFrame:
-        """Export results as a DataFrame for CSV export."""
-        df = pd.DataFrame(index=self.nav.index)
-        df["portfolio_nav"] = self.nav
-        df["benchmark_nav"] = self.benchmark_nav
-
-        # Add weights
-        for ticker in self.weights.columns:
-            df[f"{ticker}_weight"] = self.weights[ticker]
-
-        # Add VIX slope if available
-        if self.vix_slope is not None:
-            df["vix_slope"] = self.vix_slope
-
-        # Add event column
-        event_dates = {e.date: e.event_type for e in self.events}
-        df["event"] = df.index.map(
-            lambda d: event_dates.get(d.date() if hasattr(d, "date") else d, "")
-        )
-
-        return df
 
 
 class BacktestEngine:
@@ -302,25 +302,28 @@ class BacktestEngine:
                     pending_rebalance_blocked = True
 
             elif should_rebalance and vix_blocked and strategy.mode == StrategyMode.HAMMER:
-                partial_targets = _build_partial_hammer_targets(old_weights, config.target_weights)
-                new_position = position.rebalance_to(
-                    partial_targets,
-                    current_prices,
-                    portfolio_value,
-                )
-                turnover = calculate_turnover(old_weights, partial_targets)
-                events.append(RebalanceEvent(
-                    date=current_date.date() if hasattr(current_date, "date") else current_date,
-                    event_type="partial",
-                    old_weights=old_weights,
-                    new_weights=partial_targets,
-                    turnover=turnover,
-                    vix_slope=current_vix_slope,
-                    reason="VIX inverted: equity sleeve frozen, inter-asset rebalance allowed",
-                ))
-                position = new_position
-                portfolio_value = position.value(current_prices)
-                pending_rebalance_blocked = False
+                # Only execute partial rebalance once per blocked episode
+                # (not every day drift remains above threshold during VIX inversion)
+                if not pending_rebalance_blocked:
+                    partial_targets = _build_partial_hammer_targets(old_weights, config.target_weights)
+                    new_position = position.rebalance_to(
+                        partial_targets,
+                        current_prices,
+                        portfolio_value,
+                    )
+                    turnover = calculate_turnover(old_weights, partial_targets)
+                    events.append(RebalanceEvent(
+                        date=current_date.date() if hasattr(current_date, "date") else current_date,
+                        event_type="partial",
+                        old_weights=old_weights,
+                        new_weights=partial_targets,
+                        turnover=turnover,
+                        vix_slope=current_vix_slope,
+                        reason="VIX inverted: equity sleeve frozen, inter-asset rebalance allowed",
+                    ))
+                    position = new_position
+                    portfolio_value = position.value(current_prices)
+                    pending_rebalance_blocked = True
 
             elif should_rebalance:
                 # Execute rebalance

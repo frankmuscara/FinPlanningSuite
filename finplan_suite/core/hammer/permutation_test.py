@@ -11,8 +11,9 @@ Usage:
 import os
 import random
 from datetime import date
-from dataclasses import dataclass
-from typing import List, Tuple, Dict, Set
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import List, Tuple, Dict, Optional, Set
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -28,7 +29,7 @@ except ImportError:
 
 from .portfolio import PortfolioConfig
 from .strategies import StrategyConfig, StrategyMode
-from .backtest import BacktestEngine, BacktestResult
+from .backtest import BacktestEngine, BacktestResult, _build_partial_hammer_targets
 from .metrics import compute_metrics, PerformanceMetrics
 
 
@@ -45,6 +46,105 @@ DEFAULT_END = date(2026, 1, 21)
 DEFAULT_DRIFT_THRESHOLD = 0.04  # ~26 blocked events over the period
 DEFAULT_BENCHMARK = "SPY"
 DEFAULT_ITERATIONS = 10000
+
+
+class SamplingMethod(Enum):
+    """Method for sampling blocked dates in the permutation test."""
+    IID = "iid"                        # Original: uniform random sample
+    BLOCK_BOOTSTRAP = "block_bootstrap"  # Stationary block bootstrap (Politis & Romano, 1994)
+
+
+DEFAULT_SAMPLING_METHOD = SamplingMethod.BLOCK_BOOTSTRAP
+
+
+def estimate_mean_block_length(
+    all_trigger_dates: List[date],
+    hammer_blocked_dates: List[date],
+) -> float:
+    """Estimate the mean block length from HAMMER's actual blocking episodes.
+
+    Identifies consecutive runs of blocked dates within the trigger-date
+    sequence and returns their mean length. This determines the geometric
+    distribution parameter p = 1/mean_block_length for the stationary
+    block bootstrap.
+
+    Args:
+        all_trigger_dates: All dates where rebalancing was triggered (sorted).
+        hammer_blocked_dates: Dates that HAMMER actually blocked.
+
+    Returns:
+        Mean run length of consecutive blocked trigger dates.
+        Returns 1.0 if no consecutive runs are found.
+    """
+    if not hammer_blocked_dates:
+        return 1.0
+
+    blocked_set = set(hammer_blocked_dates)
+    # Build ordered list of trigger-date indices that were blocked
+    blocked_indices = [
+        i for i, d in enumerate(all_trigger_dates) if d in blocked_set
+    ]
+
+    if not blocked_indices:
+        return 1.0
+
+    # Count consecutive runs in trigger-date index space
+    run_lengths = []
+    current_run = 1
+    for j in range(1, len(blocked_indices)):
+        if blocked_indices[j] == blocked_indices[j - 1] + 1:
+            current_run += 1
+        else:
+            run_lengths.append(current_run)
+            current_run = 1
+    run_lengths.append(current_run)  # last run
+
+    return float(np.mean(run_lengths))
+
+
+def sample_blocked_stationary_bootstrap(
+    all_trigger_dates: List[date],
+    n_blocked: int,
+    mean_block_length: float,
+    rng: np.random.Generator,
+) -> Set[date]:
+    """Sample blocked dates using the stationary block bootstrap.
+
+    Implements Politis & Romano (1994): draws blocks of consecutive
+    trigger dates with geometrically-distributed lengths, wrapping
+    circularly around the trigger-date array to maintain stationarity.
+
+    Args:
+        all_trigger_dates: All dates where rebalancing was triggered (sorted).
+        n_blocked: Exact number of unique blocked dates to return.
+        mean_block_length: Mean block length for the geometric distribution.
+        rng: NumPy random generator for reproducibility.
+
+    Returns:
+        Set of exactly n_blocked unique dates.
+    """
+    n_total = len(all_trigger_dates)
+    p = 1.0 / mean_block_length  # geometric distribution parameter
+
+    blocked = set()
+    while len(blocked) < n_blocked:
+        # Draw random start index uniformly
+        start = rng.integers(0, n_total)
+        # Draw block length from Geometric(p)
+        block_len = rng.geometric(p)
+
+        # Add consecutive trigger dates with circular wrap
+        for offset in range(block_len):
+            if len(blocked) >= n_blocked:
+                break
+            idx = (start + offset) % n_total
+            blocked.add(all_trigger_dates[idx])
+
+    # If we overshot (from adding a full block), trim randomly
+    if len(blocked) > n_blocked:
+        blocked = set(rng.choice(list(blocked), size=n_blocked, replace=False))
+
+    return blocked
 
 
 @dataclass
@@ -83,6 +183,10 @@ class PermutationTestResults:
     all_trigger_dates: List[date]
     n_iterations: int
 
+    # Sampling method metadata
+    sampling_method: str = "iid"
+    mean_block_length: float = 1.0
+
 
 def run_hammer_baseline(
     portfolio_weights: Dict[str, float],
@@ -118,13 +222,15 @@ def run_hammer_baseline(
     _, _, vix_slope = fetch_vix_data(start_date, end_date)
     vix_slope = vix_slope.reindex(prices.index, method="ffill")
 
-    # Run simulation tracking ALL trigger dates
+    # Run simulation tracking trigger dates at episode boundaries
+    # (matching BacktestEngine's pending_rebalance_blocked logic)
     position = Position()
     all_trigger_dates = []
     hammer_blocked_dates = []
     nav_history = []
     total_turnover = 0.0
     rebalance_count = 0
+    pending_rebalance_blocked = False
 
     benchmark_start_price = prices[benchmark].iloc[0]
     benchmark_shares = initial_capital / benchmark_start_price
@@ -145,19 +251,31 @@ def run_hammer_baseline(
 
         should_rebalance = current_drift > drift_threshold
 
-        if should_rebalance:
+        # Reset pending blocked state when drift drops below threshold
+        if not should_rebalance and pending_rebalance_blocked:
+            pending_rebalance_blocked = False
+
+        if should_rebalance and not pending_rebalance_blocked:
             all_trigger_dates.append(current_date_val)
             current_vix_slope = vix_slope.loc[current_date]
             vix_blocked = is_vix_blocked(current_vix_slope)
 
             if vix_blocked:
                 hammer_blocked_dates.append(current_date_val)
+                # Partial rebalance: freeze equity sleeve, allow inter-asset shifts
+                old_weights = position.weights(current_prices)
+                partial_targets = _build_partial_hammer_targets(old_weights, portfolio_weights)
+                position = position.rebalance_to(partial_targets, current_prices, portfolio_value)
+                total_turnover += calculate_turnover(old_weights, partial_targets)
+                portfolio_value = position.value(current_prices)
+                pending_rebalance_blocked = True
             else:
                 old_weights = position.weights(current_prices)
                 position = position.rebalance_to(portfolio_weights, current_prices, portfolio_value)
                 total_turnover += calculate_turnover(old_weights, portfolio_weights)
                 rebalance_count += 1
                 portfolio_value = position.value(current_prices)
+                pending_rebalance_blocked = False
 
         nav_history.append(portfolio_value)
 
@@ -206,6 +324,7 @@ def run_permutation_iteration(
     total_turnover = 0.0
     rebalance_count = 0
     actual_blocked = 0
+    pending_rebalance_blocked = False
 
     benchmark_start_price = prices[benchmark].iloc[0]
     benchmark_shares = initial_capital / benchmark_start_price
@@ -226,16 +345,28 @@ def run_permutation_iteration(
 
         should_rebalance = current_drift > drift_threshold
 
-        if should_rebalance:
+        # Reset pending blocked state when drift drops below threshold
+        if not should_rebalance and pending_rebalance_blocked:
+            pending_rebalance_blocked = False
+
+        if should_rebalance and not pending_rebalance_blocked:
             # Check if this date is in blocked_dates
             if current_date_val in blocked_dates:
+                # Partial rebalance: freeze equity sleeve, allow inter-asset shifts
+                old_weights = position.weights(current_prices)
+                partial_targets = _build_partial_hammer_targets(old_weights, portfolio_weights)
+                position = position.rebalance_to(partial_targets, current_prices, portfolio_value)
+                total_turnover += calculate_turnover(old_weights, partial_targets)
                 actual_blocked += 1
+                portfolio_value = position.value(current_prices)
+                pending_rebalance_blocked = True
             else:
                 old_weights = position.weights(current_prices)
                 position = position.rebalance_to(portfolio_weights, current_prices, portfolio_value)
                 total_turnover += calculate_turnover(old_weights, portfolio_weights)
                 rebalance_count += 1
                 portfolio_value = position.value(current_prices)
+                pending_rebalance_blocked = False
 
         nav_history.append(portfolio_value)
 
@@ -270,6 +401,8 @@ def run_permutation_test(
     n_iterations: int = None,
     random_seed: int = 42,
     show_progress: bool = True,
+    sampling_method: SamplingMethod = None,
+    mean_block_length: Optional[float] = None,
 ) -> PermutationTestResults:
     """Run the full Monte Carlo permutation test.
 
@@ -282,6 +415,10 @@ def run_permutation_test(
         n_iterations: Number of permutation iterations
         random_seed: Random seed for reproducibility
         show_progress: Whether to show progress bar
+        sampling_method: How to sample blocked dates (IID or BLOCK_BOOTSTRAP).
+            Defaults to BLOCK_BOOTSTRAP.
+        mean_block_length: Mean block length for stationary bootstrap.
+            If None, auto-estimated from HAMMER's actual blocking episodes.
 
     Returns:
         PermutationTestResults with all statistics
@@ -293,9 +430,17 @@ def run_permutation_test(
     drift_threshold = drift_threshold or DEFAULT_DRIFT_THRESHOLD
     benchmark = benchmark or DEFAULT_BENCHMARK
     n_iterations = n_iterations or DEFAULT_ITERATIONS
+    sampling_method = sampling_method or DEFAULT_SAMPLING_METHOD
 
     random.seed(random_seed)
     np.random.seed(random_seed)
+    rng = np.random.default_rng(random_seed)
+
+    sampling_label = (
+        "Stationary Block Bootstrap (Politis & Romano, 1994)"
+        if sampling_method == SamplingMethod.BLOCK_BOOTSTRAP
+        else "I.I.D. Uniform Random"
+    )
 
     print("=" * 60)
     print("HAMMER PERMUTATION TEST")
@@ -305,6 +450,7 @@ def run_permutation_test(
     print(f"Drift Threshold: {drift_threshold:.0%}")
     print(f"Benchmark: {benchmark}")
     print(f"Iterations: {n_iterations:,}")
+    print(f"Sampling Method: {sampling_label}")
     print()
 
     # Step 1: Run HAMMER baseline
@@ -319,12 +465,22 @@ def run_permutation_test(
 
     n_blocked = len(hammer_blocked_dates)
 
+    # Auto-estimate mean block length if using block bootstrap
+    if sampling_method == SamplingMethod.BLOCK_BOOTSTRAP and mean_block_length is None:
+        mean_block_length = estimate_mean_block_length(
+            all_trigger_dates, hammer_blocked_dates,
+        )
+    elif mean_block_length is None:
+        mean_block_length = 1.0
+
     print(f"HAMMER Results:")
     print(f"  CAGR: {hammer_metrics.cagr:.2%}")
     print(f"  Sharpe: {hammer_metrics.sharpe_ratio:.2f}")
     print(f"  Turnover: {hammer_metrics.total_turnover:.2%}")
     print(f"  Blocked Days: {n_blocked}")
     print(f"  Total Trigger Days: {len(all_trigger_dates)}")
+    if sampling_method == SamplingMethod.BLOCK_BOOTSTRAP:
+        print(f"  Estimated Mean Block Length: {mean_block_length:.1f}")
     print()
 
     if n_blocked == 0:
@@ -348,8 +504,13 @@ def run_permutation_test(
         iterator = tqdm(iterator, desc="Permutations")
 
     for _ in iterator:
-        # Randomly select n_blocked dates from all trigger dates
-        random_blocked = set(random.sample(all_trigger_dates, n_blocked))
+        # Sample blocked dates based on chosen method
+        if sampling_method == SamplingMethod.BLOCK_BOOTSTRAP:
+            random_blocked = sample_blocked_stationary_bootstrap(
+                all_trigger_dates, n_blocked, mean_block_length, rng,
+            )
+        else:
+            random_blocked = set(random.sample(all_trigger_dates, n_blocked))
 
         perm_result = run_permutation_iteration(
             portfolio_weights,
@@ -398,6 +559,8 @@ def run_permutation_test(
         turnover_pvalue=turnover_pvalue,
         all_trigger_dates=all_trigger_dates,
         n_iterations=n_iterations,
+        sampling_method=sampling_method.value,
+        mean_block_length=mean_block_length,
     )
 
 
@@ -539,6 +702,16 @@ def print_summary_table(results: PermutationTestResults):
     print("=" * 80)
     print("PERMUTATION TEST SUMMARY")
     print("=" * 80)
+
+    # Sampling method info
+    sampling_label = (
+        "Stationary Block Bootstrap (Politis & Romano, 1994)"
+        if results.sampling_method == "block_bootstrap"
+        else "I.I.D. Uniform Random"
+    )
+    print(f"  Sampling Method: {sampling_label}")
+    if results.sampling_method == "block_bootstrap":
+        print(f"  Mean Block Length: {results.mean_block_length:.1f}")
     print()
 
     # Header
@@ -615,6 +788,22 @@ def save_results_csv(results: PermutationTestResults, output_dir: str) -> str:
     summary_path = os.path.join(output_dir, "permutation_summary.csv")
     summary_df.to_csv(summary_path, index=False)
     print(f"Saved: {summary_path}")
+
+    # Metadata CSV with sampling parameters
+    meta_df = pd.DataFrame({
+        'Parameter': [
+            'sampling_method', 'mean_block_length', 'n_iterations',
+            'n_blocked', 'n_trigger_dates',
+        ],
+        'Value': [
+            results.sampling_method, results.mean_block_length,
+            results.n_iterations, len(results.hammer_blocked_dates),
+            len(results.all_trigger_dates),
+        ],
+    })
+    meta_path = os.path.join(output_dir, "permutation_metadata.csv")
+    meta_df.to_csv(meta_path, index=False)
+    print(f"Saved: {meta_path}")
 
     # Full distribution data
     dist_df = pd.DataFrame({

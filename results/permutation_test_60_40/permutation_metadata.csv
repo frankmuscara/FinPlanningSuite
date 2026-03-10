@@ -1,0 +1,6 @@
+Parameter,Value
+sampling_method,block_bootstrap
+mean_block_length,6.0
+n_iterations,10000
+n_blocked,6
+n_trigger_dates,15
